@@ -86,5 +86,58 @@ class SyntheticRunTests(unittest.TestCase):
         self.assertIn("Synthetic verdict.", html)
 
 
+class CorrectedChecklistRunTests(unittest.TestCase):
+    """Corrected and set-aside checklist items flow through results.json, the brief and the report."""
+
+    HTTPS, SAP = "e7a8dc4a-20e2-47c3-b297-11b1352beee0", "82734c88-6ba2-4802-8459-11475e39e530"
+
+    def test_corrections_reach_brief_and_report(self):
+        from azgov_assess import checklists as cl
+        upstream = json.loads((ROOT / "tests" / "fixtures" / "upstream_defective_queries.json").read_text(encoding="utf-8"))
+        data = {"items": [
+            {"guid": self.HTTPS, "text": "Require HTTPS <b>", "severity": "High", "service": "Storage",
+             "category": "Security", "graph": upstream[self.HTTPS]["graph"]},
+            {"guid": self.SAP, "text": "SAP public IP", "severity": "High", "service": "SAP", "category": "Security",
+             "graph": upstream[self.SAP]["graph"]},
+        ]}
+
+        class Client:
+            calls = 0
+            scope = type("S", (), {"describe": lambda self, *a: "test scope"})()
+
+            def query(self, kql):  # the corrected HTTPS query finds one account that fails
+                return type("R", (), {"rows": [{"id": "/subscriptions/1/resourceGroups/rg/providers/Microsoft.Storage/"
+                                                      "storageAccounts/sa1", "compliant": 0}],
+                                      "truncated": False, "elapsed": 0.0})()
+
+        class Source:
+            ref, commit, commit_date, local = "main", "abc1234", None, None
+
+            def load(self, key):
+                return data
+
+            def path_for(self, key):
+                return f"checklists/{key}_checklist.en.json"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = fake_run.main(tmp, with_azgovviz=True, with_checklists=False)
+            results = cl.ChecklistEvaluator(Client(), Source(), {"microsoft.storage/storageaccounts": 1}).evaluate(
+                ["waf"], progress=False)
+            util.write_json(run_dir / "checklists" / "results.json", cl.strip_private(results))
+            result = analysis.analyze_run(run_dir, util.read_json(run_dir / "run.json"))
+            result.pop("_checklists", None)
+            util.write_json(run_dir / "analysis" / "findings.json", result)
+            self.assertEqual({c["guid"]: c["action"] for c in result["sources"]["checklists"]["corrections"]},
+                             {self.HTTPS: "corrected", self.SAP: "set aside"})
+            brief = analysis.brief_markdown(result)
+            self.assertIn("corrected or set aside", brief)
+            html = report.render_run(run_dir).read_text(encoding="utf-8")
+            self.assertIn("Checklist query corrections", html)
+            self.assertIn('class="assist">query corrected<', html)
+            self.assertIn("Upstream query (not used)", html)
+            self.assertIn("Require HTTPS &lt;b&gt;", html)
+            self.assertNotIn("Require HTTPS <b>", html)
+
+
 if __name__ == "__main__":
     unittest.main()

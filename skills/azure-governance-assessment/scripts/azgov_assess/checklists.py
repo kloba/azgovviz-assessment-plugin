@@ -246,14 +246,19 @@ QUERY_CORRECTIONS: Dict[str, Dict[str, Any]] = {
     "da1a3c06-d1d5-a940-9a99-fcc05966fe7c": {
         "defect": r"on\s+\$left\.lowerCaseNsgId\s*==\s*\$right\.lowerCaseTargetNsgId",
         "reason": "The upstream query accepts only NSG flow logs, which can no longer be created (virtual network flow "
-                  "logs replace them). The corrected query also accepts an enabled flow log on the NSG's subnet or "
-                  "virtual network.",
+                  "logs replace them). The corrected query also accepts an enabled flow log on the network interface, "
+                  "subnet or virtual network the NSG protects.",
         "query": "resources | where type =~ 'microsoft.network/networksecuritygroups' "
-                 "| project name, id, tags, subnets = properties.subnets "
+                 "| project name, id, nsgId = tolower(id), subnets = properties.subnets, nics = properties.networkInterfaces "
                  "| mv-expand subnet = iff(array_length(subnets) > 0, subnets, dynamic([{}])) "
-                 "| extend subnetId = tolower(tostring(subnet.id)) "
-                 "| extend vnetId = iff(isempty(subnetId), '', strcat_array(array_slice(split(subnetId, '/'), 0, 8), '/')) "
-                 "| mv-expand target = pack_array(tolower(id), subnetId, vnetId) to typeof(string) "
+                 "| mv-expand nic = iff(array_length(nics) > 0, nics, dynamic([{}])) "
+                 "| extend subnetId = tolower(tostring(subnet.id)), nicId = tolower(tostring(nic.id)) "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.network/networkinterfaces' "
+                 "| mv-expand ipc = properties.ipConfigurations "
+                 "| project nicId = tolower(id), nicSubnetId = tolower(tostring(ipc.properties.subnet.id))) on nicId "
+                 "| extend vnetId = iff(isempty(subnetId), '', strcat_array(array_slice(split(subnetId, '/'), 0, 8), '/')), "
+                 "nicVnetId = iff(isempty(nicSubnetId), '', strcat_array(array_slice(split(nicSubnetId, '/'), 0, 8), '/')) "
+                 "| mv-expand target = pack_array(nsgId, subnetId, vnetId, nicId, nicSubnetId, nicVnetId) to typeof(string) "
                  "| where isnotempty(target) "
                  "| join kind=leftouter (resources | where type =~ 'microsoft.network/networkwatchers/flowlogs' "
                  "and properties.enabled == true | project target = tolower(tostring(properties.targetResourceId)), "
@@ -261,7 +266,7 @@ QUERY_CORRECTIONS: Dict[str, Dict[str, Any]] = {
                  "| summarize covered = countif(isnotempty(flowLog)) by name, id "
                  "| where covered == 0 "
                  "| project recommendationId = 'da1a3c06-d1d5-a940-9a99-fcc05966fe7c', name, id, "
-                 "param1 = 'Flow logs (NSG, subnet or virtual network): not configured or disabled'",
+                 "param1 = 'Flow logs (NSG, network interface, subnet or virtual network): not configured or disabled'",
     },
     # APRL "Configure monitoring for all Azure Virtual Machines"
     "4a9d8973-6dba-0042-b3aa-07924877ebd5": {
@@ -461,8 +466,10 @@ def _row_verdict(row: Dict[str, Any]) -> Optional[bool]:
 
 def _phantom(row: Dict[str, Any]) -> bool:
     """A row that names nothing but a verdict: `summarize arg_max(id, *)` without `by` returns one even when no
-    resource matched, which must not count as a non-compliant resource."""
-    return all(v is None or v == "" for k, v in row.items() if str(k).lower() != "compliant")
+    resource matched, which must not count as a non-compliant resource. (A lone `compliant` column is a real
+    tenant-level verdict.)"""
+    others = [v for k, v in row.items() if str(k).lower() != "compliant"]
+    return bool(others) and all(v is None or v == "" for v in others)
 
 
 def _row_id(row: Dict[str, Any]) -> str:

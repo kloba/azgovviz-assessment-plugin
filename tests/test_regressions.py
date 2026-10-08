@@ -92,6 +92,27 @@ class ChecklistModeTests(unittest.TestCase):
                    '"details": [{"message": "Query is invalid."}]}}')
         self.assertEqual(_error_details(payload), ("BadRequest", "Query is invalid."))
 
+    def test_lone_verdict_column_is_a_real_verdict(self):
+        # a tenant-level query that only projects `compliant` is not a phantom row
+        out = cl.evaluate_rows({}, "resources | summarize n = count() | project compliant = n > 0", [{"compliant": 0}], {})
+        self.assertEqual(out["status"], "non_compliant")
+
+    def test_direct_user_access_needs_groups_to_pass(self):
+        from azgov_assess.analyzers.identity import direct_user_access
+        self.assertEqual(direct_user_access(0, 0), ("pass", 0.0))
+        self.assertEqual(direct_user_access(3, 5)[0], "pass")      # a few break-glass accounts next to groups
+        self.assertEqual(direct_user_access(3, 0)[0], "warn")      # small tenant without any group
+        self.assertEqual(direct_user_access(5, 10)[0], "warn")
+        self.assertEqual(direct_user_access(21, 0), ("fail", 100.0))
+
+    def test_trend_flags_baseline_scored_with_other_rules(self):
+        cur = {"rules": analysis.RULES_VERSION, "scores": {"overall": {"score": 61.0}, "domains": []}, "findings": []}
+        old = {"scores": {"overall": {"score": 60.0}, "domains": []}, "findings": []}  # pre-1.1 findings.json
+        t = analysis.compare(cur, old, "")
+        self.assertFalse(t["comparable"])
+        self.assertIn("other assessment rules", " ".join(t["sourceDiff"]))
+        self.assertTrue(analysis.compare(cur, dict(old, rules=analysis.RULES_VERSION), "")["comparable"])
+
 
 class PolicyStateTests(unittest.TestCase):
     def _ctx(self, inv):

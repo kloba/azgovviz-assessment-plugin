@@ -12,6 +12,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from . import scoring, util
 from .azgovviz import AzGovVizData
 
+# Bump when finding logic or checklist query corrections change verdicts: a trend against a baseline scored with
+# other rules is marked indicative (re-running `azgov-assess analyze` on the baseline re-scores it).
+RULES_VERSION = 2
+
 
 @dataclass
 class Finding:
@@ -163,6 +167,7 @@ def analyze_run(run_dir: Path, run_data: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "schema": "azgov-assess/findings@1",
         "generatedAt": util.iso(),
+        "rules": RULES_VERSION,
         "tenant": run_data.get("tenant"),
         "scope": run_data.get("scope"),
         "sources": {
@@ -390,6 +395,10 @@ def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str
     if None not in (scope(current), scope(baseline)) and scope(current) != scope(baseline) and not same_text:
         source_diff.append(f"scope differs (baseline: {(baseline.get('scope') or {}).get('description') or 'n/a'}; "
                            f"now: {(current.get('scope') or {}).get('description') or 'n/a'})")
+    base_rules, cur_rules = baseline.get("rules") or 1, current.get("rules") or 1
+    if base_rules != cur_rules:
+        source_diff.append(f"the baseline was scored with other assessment rules (v{base_rules}, now v{cur_rules}); "
+                           "run `azgov-assess analyze --run-dir <baseline>` to re-score it")
     if cur_src.get("checklists") and base_src.get("checklists") and checklist_keys(current) != checklist_keys(baseline):
         source_diff.append(f"checklists differ (baseline: {', '.join(checklist_keys(baseline)) or 'none'}; "
                            f"now: {', '.join(checklist_keys(current)) or 'none'})")

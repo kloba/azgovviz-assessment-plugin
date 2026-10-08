@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..analysis import Finding, analyzer, evidence
 from .common import ALZ, PRIVILEGED_ROLE_NAMES, WRITE_ROLE_NAMES, ref
@@ -53,6 +53,15 @@ def _scope_label(r: Dict[str, str]) -> str:
     if kind == "Res":
         return f"Res {r.get('RoleAssignmentScopeRes')} ({name})"
     return r.get("Scope") or ""
+
+
+def direct_user_access(users: int, groups: int) -> Tuple[str, float]:
+    """IAM-005 verdict and the share of people's role assignments that target users directly. A handful of
+    direct assignments (break-glass accounts) is fine - but only next to group-based access."""
+    share = round(100 * users / (users + groups), 1) if users + groups else 0.0
+    if share <= 25 or (users <= 3 and groups):
+        return "pass", share
+    return ("warn" if share <= 50 or users <= 3 else "fail"), share
 
 
 def _principal(r: Dict[str, str]) -> str:
@@ -185,8 +194,7 @@ def identity_findings(ctx) -> List[Finding]:
     users = [r for r in scoped if (r.get("ObjectType") or "").startswith("User")]
     groups = [r for r in scoped if r.get("ObjectType") == "Group"]
     human = len(users) + len(groups)
-    share = round(100 * len(users) / human, 1) if human else 0
-    status = "pass" if share <= 25 or len(users) <= 3 else ("warn" if share <= 50 else "fail")
+    status, share = direct_user_access(len(users), len(groups))
     out.append(Finding(
         "IAM-005", DOMAIN, "Access granted to individual users instead of groups", "medium", status,
         f"{len(users)} of {human} role assignments to people ({share}%) target individual users; "

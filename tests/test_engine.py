@@ -130,6 +130,14 @@ class QueryCorrectionTests(unittest.TestCase):
             if q:  # a corrected query must not carry the defect it replaces
                 self.assertIsNone(cl.corrected_query({"guid": guid}, q)[1], guid)
 
+    def test_corrected_queries_keep_the_result_convention(self):
+        # a corrected query must still return `compliant` rows (or APRL rows) like the item's upstream query
+        for guid, up in self.UPSTREAM.items():
+            q, _ = cl.corrected_query({"guid": guid}, up["graph"])
+            if q:
+                self.assertEqual(cl.query_mode({}, q), cl.query_mode({}, up["graph"]), guid)
+                self.assertNotEqual(cl.query_mode({}, q), "listing", guid)
+
     def test_correction_stops_once_upstream_is_fixed(self):
         guid = "e7a8dc4a-20e2-47c3-b297-11b1352beee0"
         fixed = self.UPSTREAM[guid]["graph"].replace("== false", "== true")
