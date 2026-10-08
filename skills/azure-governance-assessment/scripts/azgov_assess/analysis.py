@@ -346,13 +346,18 @@ def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str
     source_diff = [f"{labels.get(k, k)} {'only in this run' if cur_src.get(k) else 'only in the baseline'}"
                    for k in sorted(set(cur_src) | set(base_src)) if cur_src.get(k) != base_src.get(k)]
 
-    def scope(res: Dict[str, Any]) -> Tuple[Any, ...]:
+    def scope(res: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
         sc = res.get("scope") or {}
+        if not any(k in sc for k in ("managementGroups", "subscriptions", "description")):
+            return None  # unknown (e.g. an AzGovViz-only run): not evidence of a different scope
+        if sc.get("description") and not sc.get("managementGroups") and not sc.get("subscriptions"):
+            return (sc["description"],)
         return (tuple(sorted(sc.get("managementGroups") or [])), tuple(sorted(sc.get("subscriptions") or [])))
 
     def checklist_keys(res: Dict[str, Any]) -> List[str]:
         return sorted(c.get("key") for c in (res.get("summary") or {}).get("checklists", []) if c.get("key"))
-    if scope(current) != scope(baseline) and all((r.get("scope") or {}) for r in (current, baseline)):
+    same_text = (current.get("scope") or {}).get("description") == (baseline.get("scope") or {}).get("description")
+    if None not in (scope(current), scope(baseline)) and scope(current) != scope(baseline) and not same_text:
         source_diff.append(f"scope differs (baseline: {(baseline.get('scope') or {}).get('description') or 'n/a'}; "
                            f"now: {(current.get('scope') or {}).get('description') or 'n/a'})")
     if cur_src.get("checklists") and base_src.get("checklists") and checklist_keys(current) != checklist_keys(baseline):
