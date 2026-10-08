@@ -303,6 +303,132 @@ QUERY_CORRECTIONS: Dict[str, Dict[str, Any]] = {
                   "the legacy zoneRedundancy property says, so the upstream query flags protected registries. Resource "
                   "Graph cannot tell which regions have availability zones.",
     },
+    # APRL "Public IP addresses should have DDoS protection enabled" - a false pass
+    "c4254c66-b8a5-47aa-82f6-e7d7fb418f47": {
+        "defect": r'protectionMode\s*!in~\s*\(\s*"Enabled"\s*,\s*"VirtualNetworkInherited"\s*\)',
+        "reason": "The upstream query counts the default 'VirtualNetworkInherited' mode as protected, but a public IP only "
+                  "inherits DDoS protection from a virtual network with a DDoS Network Protection plan. The corrected "
+                  "query accepts inherited protection only when a virtual network in scope has such a plan.",
+        "query": "resources | where type =~ 'Microsoft.Network/publicIPAddresses' "
+                 "| extend mode = tostring(properties.ddosSettings.protectionMode), joinKey = 1 "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.network/virtualnetworks' "
+                 "and tobool(properties.enableDdosProtection) == true "
+                 "| summarize protectedVnets = count() | extend joinKey = 1) on joinKey "
+                 "| where not(mode =~ 'Enabled' or (mode =~ 'VirtualNetworkInherited' and coalesce(protectedVnets, 0) > 0)) "
+                 "| project recommendationId = 'c4254c66-b8a5-47aa-82f6-e7d7fb418f47', name, id, tags, "
+                 "param1 = strcat('DDoS protection mode: ', iff(isempty(mode), 'not set', mode), "
+                 "iff(mode =~ 'VirtualNetworkInherited', ' (no virtual network has DDoS Network Protection)', ''))",
+    },
+    # ALZ C02.14 "Ensure tags are used for billing and cost management." - a false pass
+    "5de32c19-9248-4160-9d5d-1e4e614658d3": {
+        "defect": r"resources\s*\|\s*extend\s+compliant\s*=\s*isnotnull\(\s*\['tags'\]\s*\)",
+        "reason": "The upstream query treats an empty tag set as tagged, so resources without any tag pass.",
+        "query": "resources | extend compliant = tostring(tags) !in ('', '{}') "
+                 "| project name, id, subscriptionId, resourceGroup, tags, compliant",
+    },
+    # "Azure AI Services are properly tagged for better management" - a false pass
+    "e1d7aaab-3571-4449-ab80-53d89f89dc7b": {
+        "defect": r"compliant\s*=\s*\(\s*tags\s*!=\s*'\{\}'\s*\)",
+        "reason": "The upstream query compares the tags with '{}', which is also true when a resource has no tags at "
+                  "all, so untagged AI and Search resources pass.",
+        "query": "resources | where type =~ 'microsoft.cognitiveservices/accounts' or type =~ 'microsoft.search/searchservices' "
+                 "| project id, compliant = (tostring(tags) !in ('', '{}'))",
+    },
+    # ALZ C02.01 "Enforce reasonably flat management group hierarchy with no more than four levels." - a false pass
+    "2df27ee4-12e7-4f98-9f63-04722dd69c5b": {
+        "defect": r"compliant\s*=\s*\(\s*array_length\(mgmtChain\)\s*<=\s*4\s+and\s+array_length\(mgmtChain\)\s*>\s*1\s*\)\s*$",
+        "reason": "The upstream query measures depth only through subscriptions, so a management-group branch deeper "
+                  "than four levels that holds no subscription is never checked. The corrected query also checks every "
+                  "management group.",
+        "query": "resourcecontainers | where type =~ 'microsoft.resources/subscriptions' "
+                 "| extend mgmtChain = properties.managementGroupAncestorsChain "
+                 "| project id, name, compliant = (array_length(mgmtChain) <= 4 and array_length(mgmtChain) > 1) "
+                 "| union (resourcecontainers | where type =~ 'microsoft.management/managementgroups' "
+                 "| project id, name, compliant = (coalesce(array_length(properties.details.managementGroupAncestorsChain), 0) < 4))",
+    },
+    # ALZ D01.14 "Use Standard Load Balancer SKU with a zone-redundant deployment ..." - a false pass
+    "9dcd6250-9c4a-4382-aa9b-5b84c64fc1fe": {
+        "defect": r"tolower\(sku\.name\)\s*!=\s*'basic'(?![\s\S]*SKU: Basic)",
+        "reason": "The upstream query leaves out Basic SKU load balancers, which meet neither part of the item (Standard "
+                  "SKU, zone redundancy), so they count as compliant.",
+        "replace": [r"\Z", " | union (resources | where type =~ 'microsoft.network/loadbalancers' "
+                           "and tolower(tostring(sku.name)) == 'basic' | project name, id, tags, param1 = 'SKU: Basic', "
+                           "param2 = 'Basic SKU does not support availability zones')"],
+    },
+    # ALZ D09.02 "Don't rely on the NSG inbound default rules using the VirtualNetwork service tag ..."
+    "11deb39d-8299-4e47-bbe0-0fb5a36318a8": {
+        "defect": r"by\s+id\s*,\s*tostring\(ruleDirection\)\s*\|\s*where\s+ruleDirection\s*==\s*'Inbound'",
+        "reason": "The upstream query drops NSGs whose custom rules are all outbound, so an NSG that relies entirely on "
+                  "the default inbound rules is never evaluated.",
+        "query": "resources | where type =~ 'microsoft.network/networksecuritygroups' | project id, rules = properties.securityRules "
+                 "| mv-expand rule = iff(array_length(rules) > 0, rules, dynamic([{}])) "
+                 "| summarize StarDenies = countif(tostring(rule.properties.direction) =~ 'Inbound' "
+                 "and tostring(rule.properties.access) =~ 'Deny' and tostring(rule.properties.sourceAddressPrefix) == '*' "
+                 "and tostring(rule.properties.destinationAddressPrefix) == '*' and tostring(rule.properties.protocol) == '*' "
+                 "and tostring(rule.properties.destinationPortRange) == '*') by id "
+                 "| project id, compliant = (StarDenies > 0)",
+    },
+    # "Use HTTPS only and consider enabling HTTP Strict Transport Security (HSTS)." (App Service)
+    "475ba18f-dbf5-490c-b65d-e8e03f9bcbd4": {
+        "defect": r"kind\s*==\s*'app'\s+or\s+kind\s*==\s*'app,linux'",
+        "reason": "The upstream query looks only at apps whose kind is exactly 'app' or 'app,linux', so container and "
+                  "other web apps are never checked.",
+        "query": "resources | where type =~ 'microsoft.web/sites' and kind has 'app' "
+                 "| extend compliant = (properties.httpsOnly == true) | distinct id, compliant",
+    },
+    # SAP: "The CIDR for the primary virtual network (VNet) shouldn't conflict or overlap with the CIDR of the DR site"
+    "6561f847-3db5-4ff8-9200-5ad3c3b436ad": {
+        "defect": r"compliant\s*=\s*\(\s*cidr\s+matches\s+regex",
+        "reason": "The upstream query only checks that each virtual network uses private address ranges; it never "
+                  "compares the primary and the DR network, so it says nothing about overlapping ranges.",
+    },
+    # SAP: "enforce existing Management Group policies to SAP Subscriptions"
+    "6ba28021-4591-4147-9e39-e5309cccd979": {
+        "defect": r"compliant\s*=\s*\(\s*array_length\(mgmtChain\)\s*<=\s*4",
+        "reason": "The upstream query checks management-group depth for every subscription; it does not look at SAP "
+                  "subscriptions or the policies assigned to them.",
+    },
+    # APRL "Replicate VMs using Azure Site Recovery" - a false pass
+    "cfe22a65-b1db-fd41-9e8e-d573922709ae": {
+        "defect": r'\|\s*where\s+securityType\s*!in~\s*\(\s*"TrustedLaunch"\s*,\s*"ConfidentialVM"\s*\)',
+        "reason": "The upstream query skips Trusted launch VMs, which Site Recovery supports (Windows, and Linux VMs "
+                  "created after 1 April 2024), so they pass without being checked.",
+        "replace": [r'\|\s*where\s+securityType\s*!in~\s*\(\s*"TrustedLaunch"\s*,\s*"ConfidentialVM"\s*\)',
+                    '| where tostring(securityType) !~ "ConfidentialVM" | where not(tostring(securityType) =~ "TrustedLaunch" '
+                    'and tostring(properties.storageProfile.osDisk.osType) =~ "Linux" '
+                    'and todatetime(properties.timeCreated) < datetime(2024-04-01))'],
+    },
+    # APRL "Backup VMs with Azure Backup service" - a false pass
+    "1981f704-97b9-b645-9c57-33f8ded9261a": {
+        "defect": r"extend\s+name\s*=\s*strcat_array\(array_slice\(split\(idBackupEnabled",
+        "reason": "The upstream query matches backups to VMs by name only, so a VM without backup passes when a VM with "
+                  "the same name elsewhere is backed up.",
+        "query": "resources | where type =~ 'Microsoft.Compute/virtualMachines' | project name, id, tags, vmId = tolower(id) "
+                 "| join kind=leftouter (recoveryservicesresources "
+                 "| where type =~ 'Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems' "
+                 "| where properties.dataSourceInfo.datasourceType =~ 'Microsoft.Compute/virtualMachines' "
+                 "| project vmId = tolower(tostring(properties.sourceResourceId)), backedUp = 1) on vmId "
+                 "| where isnull(backedUp) | project recommendationId = '1981f704-97b9-b645-9c57-33f8ded9261a', name, id, tags",
+    },
+    # APRL "VM network interfaces and associated subnets both have a Network Security Group associated" - a false pass
+    "82b3cf6b-9ae2-2e44-b193-10793213f676": {
+        "defect": r"project\s+subnetId\s*=\s*tostring\(subnet\.id\)",
+        "reason": "The upstream query joins subnet IDs case-sensitively, and Azure reports them in different casing, so "
+                  "VMs whose network interface and subnet both have an NSG are not found.",
+        "query": "resources | where type =~ 'Microsoft.Network/networkInterfaces' | where isnotnull(properties.networkSecurityGroup) "
+                 "| mv-expand ipc = properties.ipConfigurations "
+                 "| project nicId = tolower(tostring(id)), subnetId = tolower(tostring(ipc.properties.subnet.id)) "
+                 "| join kind=inner (resources | where type =~ 'Microsoft.Network/networkSecurityGroups' "
+                 "and isnotnull(properties.subnets) | mv-expand subnet = properties.subnets "
+                 "| project subnetId = tolower(tostring(subnet.id))) on subnetId "
+                 "| distinct nicId "
+                 "| join kind=inner (resources | where type =~ 'Microsoft.Compute/virtualMachines' "
+                 "| mv-expand nic = properties.networkProfile.networkInterfaces "
+                 "| project name, id, tags, nicId = tolower(tostring(nic.id)), nicName = tostring(split(nic.id, '/')[8])) "
+                 "on nicId "
+                 "| project recommendationId = '82b3cf6b-9ae2-2e44-b193-10793213f676', name, id, tags, "
+                 "param1 = strcat('nic-name=', nicName)",
+    },
     # WAF / AVS "Ensure alerts are configured for Azure Service Health alerts and notifications"
     "64b0d934-a348-4726-be79-d6b5c3a36495": {
         "defect": r"^\s*resources\s*\|\s*distinct\s+subscriptionId\s*\|\s*join",

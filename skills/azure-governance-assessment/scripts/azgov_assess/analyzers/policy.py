@@ -307,7 +307,7 @@ def policy_findings(ctx) -> List[Finding]:
             "GOV-014", DOMAIN, "Pending DeployIfNotExists / Modify remediation", "low",
             "warn" if total_rem else "pass",
             f"{total_rem} non-compliant resources could be fixed by remediation tasks across {len(rem)} policies." if rem else
-            "No outstanding DeployIfNotExists/Modify remediation.",
+            "No outstanding DeployIfNotExists/Modify remediation (AzGovViz found no policies to remediate).",
             details="DINE/Modify policies only fix existing resources when a remediation task runs.",
             recommendation="Create remediation tasks for these assignments (portal: Policy > Remediation) and keep the "
                            "assignment identities least-privileged.",

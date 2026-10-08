@@ -130,8 +130,9 @@ under the root management group*, *Defender plans on all subscriptions*, *PIM in
 `checklist_graph.sh`, so you can import it into the review-checklists Excel workbook.
 
 Some upstream queries do not test what their item says: an inverted HTTPS test, an RFC 1918 regular expression
-that never matches, a VM-monitoring check that only knows the retired Azure Diagnostics extension, SAP items
-that run unrelated queries. These items get a corrected query (run against a live tenant), or are set aside for
+that never matches, a VM-monitoring check that only knows the retired Azure Diagnostics extension, tag checks that
+count an empty tag set as tagged, joins that miss resources because of ID casing, SAP items that run unrelated
+queries. These items get a corrected query (run against a live tenant), or are set aside for
 manual review when no reliable query exists (`QUERY_CORRECTIONS` in `checklists.py`). A correction applies only
 while the published query still has the defect, and the report lists every correction with its reason.
 

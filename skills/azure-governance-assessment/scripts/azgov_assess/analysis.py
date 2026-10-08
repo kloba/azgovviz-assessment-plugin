@@ -14,7 +14,7 @@ from .azgovviz import AzGovVizData
 
 # Bump when finding logic or checklist query corrections change verdicts: a trend against a baseline scored with
 # other rules is marked indicative (re-running `azgov-assess analyze` on the baseline re-scores it).
-RULES_VERSION = 2
+RULES_VERSION = 3
 
 
 @dataclass
