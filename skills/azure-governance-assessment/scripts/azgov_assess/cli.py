@@ -577,14 +577,27 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         try:
             tokens.get()
             add("arm-token", True, f"token via {tokens.provider_name}")
+            client = ResourceGraphClient(tokens, Scope(management_groups=[args.tenant]))
+            # AzGovViz needs Microsoft.Management/managementGroups/read on the target group. A Resource Graph query
+            # at management-group scope can succeed without it, so check the group itself.
             try:
-                client = ResourceGraphClient(tokens, Scope(management_groups=[args.tenant]))
-                res = client.query("resourcecontainers | where type =~ 'microsoft.resources/subscriptions' "
-                                   "| project subscriptionId, name", max_rows=1000)
-                add("tenant-root-read", True, f"Resource Graph at tenant root OK ({len(res.rows)} subscriptions)")
+                client.arm_get(f"/providers/Microsoft.Management/managementGroups/{args.tenant}", "2021-04-01")
+                add("tenant-root-read", True, "Reader on the Tenant Root Group (AzGovViz can assess the whole tenant)")
             except ArgError as exc:
-                add("tenant-root-read", False, f"no Reader at tenant root management group ({exc.code}); "
-                    "AzGovViz needs Reader on the target management group", required=False)
+                add("tenant-root-read", False, f"no read access to the Tenant Root Group ({exc.code}): AzGovViz needs "
+                    "Reader on the management group it assesses - use an account with Reader at the root, or "
+                    "--management-group <id> / --skip-azgovviz", required=False)
+            try:
+                listed = client.query("resourcecontainers | where type =~ 'microsoft.resources/subscriptions' "
+                                      "| project subscriptionId", max_rows=5000).rows
+                usable = client.arm_get("/subscriptions", "2022-12-01").get("value", [])
+                ok = {s.get("subscriptionId") for s in usable if s.get("state") == "Enabled"}
+                add("subscriptions", len(ok) >= len(listed) and bool(ok),
+                    f"{len(ok)} subscription(s) readable by this identity; {len(listed)} in the tenant hierarchy"
+                    + ("" if len(ok) >= len(listed) else " - the assessment would only cover the readable ones"),
+                    required=False)
+            except ArgError as exc:
+                add("subscriptions", False, f"cannot list subscriptions ({exc.code})", required=False)
         except AuthError as exc:
             add("arm-token", False, str(exc))
         if pwsh:
