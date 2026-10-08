@@ -299,7 +299,7 @@ def identity_findings(ctx) -> List[Finding]:
             "IAM-010", DOMAIN, "Classic subscription administrators", "low",
             "warn" if co else "pass",
             f"{len(co)} co-administrators remain on {len({r.get('SubscriptionId') for r in co})} subscriptions." if co else
-            "No classic co-administrators found.",
+            "No classic co-administrators found (Azure retired classic administrators on 31 August 2024).",
             details="Classic administrator roles were retired on 31 August 2024; leftover entries signal unmanaged "
                     "legacy access and should be converted to Azure RBAC.",
             recommendation="Remove co-administrators and grant equivalent Azure RBAC roles (prefer groups + PIM).",

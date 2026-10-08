@@ -198,6 +198,24 @@ if ($azApiCallVersion) {
     Write-Ok "AzAPICall $azApiCallVersion"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Compatibility: Azure retired classic subscription administrators (31 August 2024) and the
+# Microsoft.Authorization/classicAdministrators API now answers 404 InvalidResourceType, which AzGovViz 6.7.x
+# (AzAPICall <= 1.4.2) treats as fatal - the whole run stops. Run a copy of the script, next to the original,
+# whose classic-administrator collection returns immediately. Nothing is patched if the function changed upstream.
+# ---------------------------------------------------------------------------------------------
+$runFile = $scriptFile
+$compatibility = @()
+$source = Get-Content -Raw -Path $scriptFile
+$rx = [regex]::new('(function dataCollectionClassicAdministratorsSub \{\s*\[CmdletBinding\(\)\]Param\([^)]*\))')
+if ($rx.IsMatch($source)) {
+    $patched = $rx.Replace($source, ('$1' + "`n    return # azgov-assess: classicAdministrators API retired by Azure`n"), 1)
+    $runFile = Join-Path (Split-Path -Parent $scriptFile) 'AzGovVizParallel.azgov-assess.ps1'
+    Set-Content -Path $runFile -Value $patched -Encoding utf8BOM -NoNewline
+    $compatibility += 'classic administrators collection skipped (API retired by Azure)'
+    Write-Ok 'Compatibility: skipping the retired classicAdministrators API'
+}
+
 $prep = [ordered]@{
     tenantId                 = $TenantId
     managementGroupId        = $ManagementGroupId
@@ -209,6 +227,7 @@ $prep = [ordered]@{
     azGovVizCommit           = $commit
     azGovVizPath             = $azgvRoot
     azApiCallVersion         = $azApiCallVersion
+    compatibility            = $compatibility
     azAccountsVersion        = $azAccountsVersion
     psVersion                = $PSVersionTable.PSVersion.ToString()
 }
@@ -255,4 +274,4 @@ $shown = ($params.GetEnumerator() | Sort-Object Name | ForEach-Object {
 Write-Step "Running AzGovVizParallel.ps1 $shown"
 Set-Location $azgvRoot
 $WarningPreference = 'Continue'
-& $scriptFile @params
+& $runFile @params

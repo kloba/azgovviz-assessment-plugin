@@ -68,7 +68,8 @@ def run(tenant_id: str, out_dir: Path, management_group: Optional[str] = None,
     util.log(f"AzGovViz: starting (log: {log_path})")
     env = dict(os.environ, NO_COLOR="1")
     lines = 0
-    with open(log_path, "w", encoding="utf-8", errors="replace") as log_fh:
+    # line-buffered so `tail -f azgovviz-console.log` (or Copilot polling it) sees progress as it happens
+    with open(log_path, "w", encoding="utf-8", errors="replace", buffering=1) as log_fh:
         # own process group, so a timeout or Ctrl+C also stops children that hold stdout (e.g. git clone)
         group = {"start_new_session": True} if os.name == "posix" else \
             {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
