@@ -1,5 +1,7 @@
 # AzGovViz Assessment – GitHub Copilot CLI plugin
 
+[![tests](https://github.com/kloba/azgovviz-assessment-plugin/actions/workflows/tests.yml/badge.svg)](https://github.com/kloba/azgovviz-assessment-plugin/actions/workflows/tests.yml)
+
 Run **AzGovViz** (Azure Governance Visualizer) on a selected Microsoft Entra tenant, evaluate the
 **Azure/review-checklists** (Azure Landing Zone, Well-Architected, APRL and more) with Azure Resource Graph,
 let Copilot analyse the evidence, and get a **scored PDF assessment report** (plus the same report as an
