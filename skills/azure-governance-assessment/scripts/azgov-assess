@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Launcher for the azgov_assess engine (Python 3.9+, standard library only).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY="${AZGOV_PYTHON:-}"
+if [[ -z "$PY" ]]; then
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+      PY="$candidate"; break
+    fi
+  done
+fi
+if [[ -z "$PY" ]]; then
+  echo "azgov-assess: Python 3.9+ is required (set AZGOV_PYTHON to override)" >&2
+  exit 3
+fi
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+exec "$PY" -m azgov_assess "$@"

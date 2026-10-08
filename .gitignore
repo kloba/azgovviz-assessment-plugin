@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+azgov-assessments/
+.DS_Store
+*.pdf
