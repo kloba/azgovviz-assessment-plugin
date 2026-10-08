@@ -1,6 +1,6 @@
 ---
 name: azure-review-checklists
-description: Evaluate the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL, AKS, AVD, AI landing zone and more) against a tenant or subscriptions using their Azure Resource Graph queries, without running AzGovViz or PowerShell, and produce the HTML report. Use when the user wants checklist/landing-zone/WAF compliance results quickly, or cannot run PowerShell.
+description: Evaluate the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL, AKS, AVD, AI landing zone and more) against a tenant or subscriptions using their Azure Resource Graph queries, without running AzGovViz or PowerShell, and produce the PDF and HTML report. Use when the user wants checklist/landing-zone/WAF compliance results quickly, or cannot run PowerShell.
 ---
 
 # Azure review checklists (Resource Graph only)

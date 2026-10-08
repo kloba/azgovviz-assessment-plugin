@@ -1,6 +1,6 @@
 ---
 name: azure-governance-assessment
-description: Run a complete Azure governance assessment of a Microsoft Entra tenant - executes AzGovViz (Azure Governance Visualizer), evaluates the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL) with Azure Resource Graph, scores nine design areas, writes an AI analysis and produces a self-contained HTML assessment report. Use when the user asks to assess, audit or review Azure governance, landing zones, Azure Policy, RBAC/privileged access, Defender for Cloud coverage, or to "run AzGovViz" on a tenant.
+description: Run a complete Azure governance assessment of a Microsoft Entra tenant - executes AzGovViz (Azure Governance Visualizer), evaluates the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL) with Azure Resource Graph, scores nine design areas, writes an AI analysis and produces a PDF assessment report (plus an interactive HTML version). Use when the user asks to assess, audit or review Azure governance, landing zones, Azure Policy, RBAC/privileged access, Defender for Cloud coverage, or to "run AzGovViz" on a tenant.
 ---
 
 # Azure governance assessment (AzGovViz + Azure review checklists)
@@ -11,7 +11,7 @@ This skill turns a tenant into an evidence-based governance assessment:
    network, resource and cost data (read-only).
 2. **Azure Resource Graph** adds inventory, Defender/Advisor/policy-state and configuration evidence.
 3. **Azure/review-checklists** items (ALZ, WAF, APRL by default) are evaluated with their own Resource Graph queries.
-4. A deterministic engine produces ~50 scored findings across nine design areas and a maturity level.
+4. A deterministic engine produces ~60 scored findings across nine design areas and a maturity level.
 5. **You (Copilot)** read the brief and write the AI analysis (executive summary, key risks, roadmap).
 6. The engine renders the deliverable: a **PDF report** (cover page, numbered sections, page numbers - printed
    with headless Edge/Chrome) plus the same report as one self-contained, interactive HTML file.
@@ -78,7 +78,8 @@ scripts/azgov-assess run --tenant <TENANT_ID> [--subscriptions ...] [--checklist
   long-running command (async/detached shell, generous timeout) and poll its output; relay progress lines.
   The full AzGovViz console log is in `<run>/azgovviz/azgovviz-console.log`.
 - Exit code 10 = sign-in required (go back to Step 2). Exit code 2 = no data could be collected.
-- The command prints a JSON summary with `runDir`, `report`, `brief`, `overallScore`.
+- The command prints a JSON summary with `runDir`, `report` (HTML), `pdf`, `brief`, `overallScore`. This first
+  PDF has no AI narrative yet - the final PDF comes from the `report` command in Step 4.
 
 ### Step 4 - Write the AI analysis (this is your job)
 

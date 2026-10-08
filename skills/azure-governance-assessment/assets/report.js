@@ -157,12 +157,26 @@
   document.querySelectorAll(".filters[data-target]").forEach(setupFilter);
 
   // ---------- print ----------
+  // links to the run's local files (findings.json ...) mean nothing to a PDF recipient and expose local paths
+  function localLinks(off) {
+    document.querySelectorAll(off ? "a[href]" : "a[data-local-href]").forEach(function (a) {
+      if (off) {
+        var h = a.getAttribute("href");
+        if (/^(https?:|#|mailto:)/i.test(h)) return;
+        a.setAttribute("data-local-href", h); a.removeAttribute("href");
+      } else {
+        a.setAttribute("href", a.getAttribute("data-local-href")); a.removeAttribute("data-local-href");
+      }
+    });
+  }
   function enterPrint() {
+    localLinks(true);
     filters.forEach(function (f) { f.print(); });
     document.querySelectorAll("details.finding").forEach(function (d) { d.dataset.wasOpen = d.open ? "1" : ""; d.open = true; });
   }
   window.addEventListener("beforeprint", enterPrint);
   window.addEventListener("afterprint", function () {
+    localLinks(false);
     filters.forEach(function (f) { f.restore(); });
     document.querySelectorAll("details.finding").forEach(function (d) { d.open = d.dataset.wasOpen === "1"; });
   });

@@ -1,6 +1,6 @@
 {
   "name": "azgovviz-assessment",
-  "description": "Azure governance assessment for GitHub Copilot CLI: runs AzGovViz (Azure Governance Visualizer) on a selected tenant, evaluates the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL) with Azure Resource Graph, scores nine design areas and produces an AI-analysed, self-contained HTML assessment report.",
+  "description": "Azure governance assessment for GitHub Copilot CLI: runs AzGovViz (Azure Governance Visualizer) on a selected tenant, evaluates the Azure/review-checklists (Azure Landing Zone, Well-Architected, APRL) with Azure Resource Graph, scores nine design areas and produces an AI-analysed PDF assessment report (plus a self-contained, interactive HTML version).",
   "version": "1.0.0",
   "author": {
     "name": "Taras Kloba",

@@ -6,7 +6,7 @@ import traceback
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import scoring, util
 from .azgovviz import AzGovVizData
@@ -345,6 +345,19 @@ def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str
     labels = {"azgovviz": "AzGovViz", "inventory": "Resource Graph inventory", "checklists": "review checklists"}
     source_diff = [f"{labels.get(k, k)} {'only in this run' if cur_src.get(k) else 'only in the baseline'}"
                    for k in sorted(set(cur_src) | set(base_src)) if cur_src.get(k) != base_src.get(k)]
+
+    def scope(res: Dict[str, Any]) -> Tuple[Any, ...]:
+        sc = res.get("scope") or {}
+        return (tuple(sorted(sc.get("managementGroups") or [])), tuple(sorted(sc.get("subscriptions") or [])))
+
+    def checklist_keys(res: Dict[str, Any]) -> List[str]:
+        return sorted(c.get("key") for c in (res.get("summary") or {}).get("checklists", []) if c.get("key"))
+    if scope(current) != scope(baseline) and all((r.get("scope") or {}) for r in (current, baseline)):
+        source_diff.append(f"scope differs (baseline: {(baseline.get('scope') or {}).get('description') or 'n/a'}; "
+                           f"now: {(current.get('scope') or {}).get('description') or 'n/a'})")
+    if cur_src.get("checklists") and base_src.get("checklists") and checklist_keys(current) != checklist_keys(baseline):
+        source_diff.append(f"checklists differ (baseline: {', '.join(checklist_keys(baseline)) or 'none'}; "
+                           f"now: {', '.join(checklist_keys(current)) or 'none'})")
     return {
         "comparable": not source_diff,
         "sourceDiff": source_diff,

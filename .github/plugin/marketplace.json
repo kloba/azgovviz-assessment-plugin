@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "azgovviz-assessment",
-      "description": "Run AzGovViz on a tenant, evaluate Azure/review-checklists with Resource Graph, and produce an AI-analysed HTML governance assessment.",
+      "description": "Run AzGovViz on a tenant, evaluate Azure/review-checklists with Resource Graph, and produce an AI-analysed governance assessment as a PDF report (plus an interactive HTML version).",
       "version": "1.0.0",
       "source": "./",
       "category": "cloud-governance",

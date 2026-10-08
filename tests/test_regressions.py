@@ -185,20 +185,27 @@ class SecondReviewTests(unittest.TestCase):
 class PdfContentsTests(unittest.TestCase):
     def test_outline_page_numbers(self):
         import tempfile
+        # Executive summary (p1) has a "Security" sub-heading; Findings (p2) has its own "Security" group (p3)
         pdf = (b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >> endobj\n"
-               b"2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n"
+               b"2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 9 0 R] /Count 3 >> endobj\n"
                b"3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n"
-               b"5 0 obj << /Type /Outlines /First 6 0 R >> endobj\n"
-               b"6 0 obj << /Title (Executive summary) /Dest [3 0 R /XYZ 0 0 0] /Next 7 0 R >> endobj\n"
-               b"7 0 obj << /Title <FEFF0049006400650020002600200041> /Dest [4 0 R /XYZ 0 0 0] >> endobj\n"
-               b"8 0 obj << /Title (Scores \\(by area\\)) /Dest [4 0 R /XYZ 0 0 0] >> endobj\n%%EOF")
+               b"9 0 obj << /Type /Page /Parent 2 0 R >> endobj\n"
+               b"5 0 obj << /Type /Outlines /First 6 0 R /Last 7 0 R >> endobj\n"
+               b"6 0 obj << /Title (Executive summary) /Dest [3 0 R /XYZ 0 0 0] /Next 7 0 R /First 10 0 R >> endobj\n"
+               b"10 0 obj << /Title (Security) /Parent 6 0 R /Dest [3 0 R /XYZ 0 0 0] >> endobj\n"
+               b"7 0 obj << /Title <FEFF00460069006E00640069006E00670073> /Dest [4 0 R /XYZ 0 0 0] /First 8 0 R >> endobj\n"
+               b"8 0 obj << /Title (Security) /Parent 7 0 R /Dest [9 0 R /XYZ 0 0 0] /Next 11 0 R >> endobj\n"
+               b"11 0 obj << /Title (Scores \\(by area\\)) /Parent 7 0 R /Dest [9 0 R /XYZ 0 0 0] >> endobj\n%%EOF")
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.pdf"
             p.write_bytes(pdf)
             pages = report.pdf_outline_pages(p)
+        sep = report.TOC_SEP
         self.assertEqual(pages["Executive summary"], 1)
-        self.assertEqual(pages["Ide & A"], 2)
-        self.assertEqual(pages["Scores (by area)"], 2)
+        self.assertEqual(pages["Findings"], 2)
+        self.assertEqual(pages["Executive summary" + sep + "Security"], 1)
+        self.assertEqual(pages["Findings" + sep + "Security"], 3)  # not the summary's "Security"
+        self.assertEqual(pages["Findings" + sep + "Scores (by area)"], 3)
 
     def test_unreadable_pdf_gives_no_numbers(self):
         import tempfile

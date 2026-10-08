@@ -273,7 +273,10 @@ class Report:
     def __init__(self, run_dir: Path, out_dir: Optional[Path] = None, toc_pages: Optional[Dict[str, int]] = None):
         self.toc_pages = toc_pages or {}  # heading text -> PDF page (from a first print pass)
         # links to the run's JSON/CSV files are relative to where the HTML is written (default: <run>/report/)
-        self.base = Path(os.path.relpath(run_dir, out_dir or run_dir / "report")).as_posix()
+        try:
+            self.base = Path(os.path.relpath(run_dir, out_dir or run_dir / "report")).as_posix()
+        except ValueError:  # Windows: output on another drive / share - fall back to absolute links
+            self.base = run_dir.resolve().as_uri()
         self.dir = run_dir
         self.run = util.read_json(run_dir / "run.json", {}) or {}
         self.f = util.read_json(run_dir / "analysis" / "findings.json", None)
@@ -298,9 +301,14 @@ class Report:
     def tenant_name(self) -> str:
         return self.tenant.get("displayName") or self.tenant.get("defaultDomain") or self.tenant.get("tenantId") or "Tenant"
 
+    @property
+    def assessed_at(self):
+        """When the evidence was collected (run start) - re-analysing or re-rendering later must not change it."""
+        return (util.parse_iso(self.run.get("startedAt")) or util.parse_iso(self.f.get("generatedAt"))
+                or util.utcnow())
+
     def date(self) -> str:
-        ts = util.parse_iso(self.f.get("generatedAt")) or util.utcnow()
-        return ts.strftime("%d %b %Y")
+        return self.assessed_at.strftime("%d %b %Y")
 
     def finding_link(self, fid: str) -> str:
         if fid in self.by_id:
@@ -632,12 +640,16 @@ class Report:
             numeric = [i for i, c in enumerate(ev.get("columns", [])) if ev["rows"] and all(isinstance(r[i], (int, float)) for r in ev["rows"] if i < len(r))]
             ev_html = data_table(ev.get("columns", []), ev["rows"], numeric)
             if ev.get("total", 0) > len(ev["rows"]):
-                ev_html += f'<div class="trunc-note">Showing {len(ev["rows"])} of {ev["total"]:,} rows – full data in the AzGovViz CSV / inventory files.</div>'
+                ev_html += (f'<div class="trunc-note screen-only">Showing {len(ev["rows"])} of {ev["total"]:,} rows – full data '
+                            'in the AzGovViz CSV / inventory files.</div>')
             if ev.get("note"):
                 ev_html += f'<div class="trunc-note">{esc(ev["note"])}</div>'
-            if len(ev["rows"]) > PRINT_EVIDENCE_ROWS:
-                ev_html += (f'<div class="trunc-note print-only">Printed: first {PRINT_EVIDENCE_ROWS} of '
-                            f'{max(len(ev["rows"]), ev.get("total", 0)):,} rows. The HTML report lists them all.</div>')
+            shown, total = len(ev["rows"]), max(len(ev["rows"]), ev.get("total", 0))
+            if shown > PRINT_EVIDENCE_ROWS or total > shown:
+                ev_html += (f'<div class="trunc-note print-only">Printed: {min(shown, PRINT_EVIDENCE_ROWS)} of {total:,} rows'
+                            + (f"; the HTML report lists {shown:,}" if shown > PRINT_EVIDENCE_ROWS else "")
+                            + ("; all rows are in the AzGovViz CSV / inventory files" if total > shown else "")
+                            + ".</div>")
             ev_html = f'<div><div class="f-label">Evidence</div>{ev_html}</div>'
         refs = "".join(f'<a href="{esc(safe_url(r.get("url")))}" target="_blank" rel="noopener">{esc(r.get("title"))}</a>'
                        for r in x.get("references") or [] if safe_url(r.get("url")))
@@ -669,7 +681,7 @@ class Report:
     # -- checklists --
     def checklists_section(self) -> str:
         if not self.cl or not self.cl.get("checklists"):
-            return """<section class="block" id="checklists"><div class="section-head"><div><h2>Azure review checklists</h2>
+            return """<section class="block compact" id="checklists"><div class="section-head"><div><h2>Azure review checklists</h2>
 <p>Checklist evaluation was not run for this assessment.</p></div></div></section>"""
         src = self.cl.get("source") or {}
         cards = []
@@ -949,7 +961,7 @@ class Report:
         stats_html = "".join(f'<div><div class="n">{fmt_int(v)}</div><div class="k">{esc(k)}</div></div>' for k, v in stats)
         verdict = ""
         if self.ai and self.ai.get("overallAssessment"):
-            verdict = (f'<div class="pc-verdict">{esc(self.ai["overallAssessment"])}'
+            verdict = (f'<div class="pc-verdict"><div class="q">{esc(self.ai["overallAssessment"])}</div>'
                        f'<span class="src">AI analysis · {esc(self.ai.get("generatedBy") or "GitHub Copilot")}</span></div>')
         scope = (self.f.get("scope") or {}).get("description") or "Tenant root management group"
         ids = " · ".join(v for v in (self.tenant.get("defaultDomain"), self.tenant.get("tenantId")) if v)
@@ -957,7 +969,7 @@ class Report:
 <section class="print-cover">
   <div class="pc-band">
     <div class="pc-mark">{LOGO_SVG}<span>Azure governance assessment</span></div>
-    <div class="pc-tenant">{esc(self.tenant_name)}</div>
+    <div class="pc-tenant{" xlong" if len(self.tenant_name) > 70 else (" long" if len(self.tenant_name) > 36 else "")}">{esc(self.tenant_name)}</div>
     <div class="pc-ids">{esc(ids)}</div>
     <div class="pc-meta">
       <div><span class="k">Scope</span><span class="v">{esc(scope)}</span></div>
@@ -997,8 +1009,8 @@ class Report:
                      + ([("items", "All checklist items")] if (self.cl or {}).get("checklists") else [])),
                     ("environment", "Environment", []), ("method", "Method and sources", [])]
 
-        def entry(level: int, anchor: str, title: str, num: str = "") -> str:
-            page = self.toc_pages.get(title)
+        def entry(level: int, anchor: str, title: str, num: str = "", section: str = "") -> str:
+            page = self.toc_pages.get(section + TOC_SEP + title if section else title)
             return (f'<li class="l{level}"><a href="#{esc(anchor)}"><span class="n">{esc(num)}</span>'
                     f'<span class="t">{esc(title)}</span><span class="dots"></span>'
                     f'<span class="p">{page if page else ""}</span></a></li>')
@@ -1006,14 +1018,16 @@ class Report:
         items = []
         for i, (anchor, title, subs) in enumerate(sections, 1):
             items.append(entry(1, anchor, title, str(i)))
-            items.extend(entry(2, a, t) for a, t in subs)
+            items.extend(entry(2, a, t, section=title) for a, t in subs)
         return (f'<section class="print-toc"><div class="label">Azure governance assessment · '
                 f'{esc(self.tenant_name)}</div><h2 class="toc-title">Contents</h2><ol>{"".join(items)}</ol></section>')
 
     def page_css(self) -> str:
         """Running footer for the PDF: CSS page-margin boxes need literal strings, so they are generated here."""
-        left = css_str(f"Azure Governance Assessment · {self.tenant_name} · {self.date()}")
-        box = 'font: 500 8pt/1.3 "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; color: #5f6877;'
+        name = self.tenant_name if len(self.tenant_name) <= 42 else self.tenant_name[:40].rstrip() + "…"
+        left = css_str(f"Azure Governance Assessment · {name} · {self.date()}")
+        box = ('font: 500 8pt/1.3 "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; color: #5f6877; '
+               'white-space: nowrap;')
         return (f"@page {{ @bottom-left {{ content: {left}; {box} }} "
                 f"@bottom-right {{ content: \"Page \" counter(page) \" of \" counter(pages); {box} }} }} "
                 "@page :first { @bottom-left { content: none; } @bottom-right { content: none; } }")
@@ -1117,7 +1131,7 @@ def render_run(run_dir: Path, output: Optional[Path] = None, toc_pages: Optional
     page = rep.render()
     if output is None:
         label = util.slug((rep.tenant.get("defaultDomain") or rep.tenant_name).split(".")[0], 30)
-        stamp = (util.parse_iso(rep.f.get("generatedAt")) or util.utcnow()).strftime("%Y%m%d")
+        stamp = rep.assessed_at.strftime("%Y%m%d")
         output = run_dir / "report" / f"Azure-Governance-Assessment_{label}_{stamp}.html"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(page, encoding="utf-8")
@@ -1134,6 +1148,16 @@ BROWSERS = [
 ]
 
 
+def find_browser() -> Optional[str]:
+    import shutil
+    for b in BROWSERS:
+        if ("/" in b or "\\" in b) and Path(b).exists():
+            return b
+        if "/" not in b and "\\" not in b and shutil.which(b):
+            return shutil.which(b)
+    return None
+
+
 def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 180) -> Optional[Path]:
     """Print the report to PDF with a headless Edge/Chrome (print stylesheet, all findings expanded).
 
@@ -1144,21 +1168,19 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
     import subprocess
     import tempfile
     import time as _time
-    browser = None
-    for b in BROWSERS:
-        if ("/" in b or "\\" in b) and Path(b).exists():
-            browser = b
-            break
-        if "/" not in b and "\\" not in b and shutil.which(b):
-            browser = shutil.which(b)
-            break
+    browser = find_browser()
     if not browser:
         util.warn("PDF export skipped: no Edge/Chrome/Chromium found")
         return None
     pdf_path = pdf_path or html_path.with_suffix(".pdf")
     if pdf_path.exists():
-        pdf_path.unlink()
-    with tempfile.TemporaryDirectory(prefix="azgov-pdf-") as profile:
+        try:
+            pdf_path.unlink()
+        except PermissionError:  # Windows: the previous PDF is open in a viewer
+            pdf_path = pdf_path.with_name(f"{pdf_path.stem}-{_time.strftime('%H%M%S')}{pdf_path.suffix}")
+            util.warn(f"the previous PDF is in use; writing {pdf_path.name} instead")
+    profile = tempfile.mkdtemp(prefix="azgov-pdf-")
+    try:
         proc = subprocess.Popen([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                                  "--generate-pdf-document-outline",  # PDF bookmarks from the headings
                                  "--no-first-run", "--no-default-browser-check", f"--user-data-dir={profile}",
@@ -1185,6 +1207,8 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
                     proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)  # Edge may still touch its profile for a moment
     if not pdf_path.exists() or pdf_path.stat().st_size == 0:
         util.warn("PDF export failed (browser produced no file)")
         return None
@@ -1221,38 +1245,57 @@ def _pdf_string(raw: bytes) -> str:
     return data[2:].decode("utf-16-be", "replace") if data[:2] == b"\xfe\xff" else data.decode("latin-1")
 
 
+TOC_SEP = " › "  # key separator for second-level contents entries ("Findings › Security")
+
+
 def pdf_outline_pages(pdf_path: Path) -> Dict[str, int]:
-    """Bookmark title -> 1-based page number for an uncompressed (Chromium) PDF; {} if it cannot be read."""
+    """Page numbers of the PDF bookmarks, keyed "Section" and "Section › Sub-heading" (walking the outline tree,
+    so equal titles in different sections - e.g. a "### Security" heading in the summary - cannot collide).
+    Works for the uncompressed PDFs that Chromium writes; {} if the outline cannot be read."""
     try:
         data = pdf_path.read_bytes()
         objs = {int(m.group(1)): m.group(2) for m in re.finditer(rb"(\d+) 0 obj(.*?)endobj", data, re.S)}
         root = next(o for o in objs.values() if re.search(rb"/Type\s*/Catalog", o))
-        pages_ref = int(re.search(rb"/Pages\s+(\d+) 0 R", root).group(1))
+
+        def ref(obj: bytes, key: bytes) -> Optional[int]:
+            m = re.search(rb"/" + key + rb"\s+(\d+) 0 R", obj)
+            return int(m.group(1)) if m else None
+
         order: List[int] = []
 
-        def walk(num: int) -> None:
+        def walk_pages(num: int) -> None:
             obj = objs.get(num, b"")
             kids = re.search(rb"/Kids\s*\[([^\]]*)\]", obj)
             if re.search(rb"/Type\s*/Pages", obj) and kids:
                 for k in re.findall(rb"(\d+) 0 R", kids.group(1)):
-                    walk(int(k))
+                    walk_pages(int(k))
             else:
                 order.append(num)
-        walk(pages_ref)
+        walk_pages(ref(root, b"Pages"))
         index = {num: i + 1 for i, num in enumerate(order)}
         out: Dict[str, int] = {}
-        for obj in objs.values():
-            t = re.search(rb"/Title\s*(\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f]*>)", obj, re.S)
-            d = re.search(rb"/Dest\s*\[\s*(\d+) 0 R", obj) or re.search(rb"/D\s*\[\s*(\d+) 0 R", obj)
-            if t and d and int(d.group(1)) in index:
-                out.setdefault(_pdf_string(t.group(1)).strip(), index[int(d.group(1))])
+
+        def walk_items(first: Optional[int], prefix: str, depth: int) -> None:
+            num, seen = first, set()
+            while num is not None and num not in seen and depth < 8:
+                seen.add(num)
+                obj = objs.get(num, b"")
+                t = re.search(rb"/Title\s*(\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f]*>)", obj, re.S)
+                d = re.search(rb"/Dest\s*\[\s*(\d+) 0 R", obj) or re.search(rb"/D\s*\[\s*(\d+) 0 R", obj)
+                title = _pdf_string(t.group(1)).strip() if t else ""
+                key = prefix + title
+                if title and d and int(d.group(1)) in index:
+                    out.setdefault(key, index[int(d.group(1))])
+                walk_items(ref(obj, b"First"), key + TOC_SEP, depth + 1)
+                num = ref(obj, b"Next")
+        walk_items(ref(objs.get(ref(root, b"Outlines"), b""), b"First"), "", 0)
         return out
     except Exception as exc:  # the contents page then simply has no page numbers
         util.debug(f"PDF outline not readable: {exc}")
         return {}
 
 
-def build_pdf(run_dir: Path, html_path: Path) -> Optional[Path]:
+def build_pdf(run_dir: Path, html_path: Path, pdf_path: Optional[Path] = None) -> Optional[Path]:
     """Print the report to PDF; a first pass finds the page of every section for the contents page."""
     probe = export_pdf(html_path, html_path.with_name(html_path.stem + ".pass1.pdf"))
     if not probe:
@@ -1264,4 +1307,4 @@ def build_pdf(run_dir: Path, html_path: Path) -> Optional[Path]:
         pass
     if pages:
         render_run(run_dir, html_path, toc_pages=pages)
-    return export_pdf(html_path)
+    return export_pdf(html_path, pdf_path)

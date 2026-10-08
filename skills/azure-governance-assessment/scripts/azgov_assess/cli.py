@@ -65,10 +65,10 @@ def _resolve_run_dir(value: Optional[str]) -> Path:
         if (p / "run.json").exists():
             return p
         raise SystemExit(f"error: {p} is not an assessment run folder (run.json missing)")
-    root = Path(os.environ.get("AZGOV_OUTPUT_DIR", "azgov-assessments")).resolve()
+    root = Path(os.environ.get("AZGOV_OUTPUT_DIR", "azgov-assessments")).expanduser().resolve()
     runs = sorted((d for d in root.glob("*/run.json")), key=lambda p: p.stat().st_mtime)
     if not runs:
-        raise SystemExit("error: no run folder given and none found under ./azgov-assessments")
+        raise SystemExit(f"error: no run folder given and none found under {root} (use --run-dir)")
     return runs[-1].parent
 
 
@@ -284,6 +284,10 @@ def _stage_analysis(run: Run, baseline: Optional[str] = None) -> Dict[str, Any]:
     run.set_stage("analysis", "running", startedAt=util.iso())
     result = analysis.analyze_run(run.dir, run.data)
     baseline = baseline or run.data.get("baseline")
+    if baseline and Path(baseline).expanduser().resolve() == run.dir.resolve():
+        util.warn("--baseline points at this run itself - ignored")
+        run.data.pop("baseline", None)
+        baseline = None
     if baseline:
         base_findings = util.read_json(Path(baseline).expanduser() / "analysis" / "findings.json", None)
         base_tenant = ((base_findings or {}).get("tenant") or {}).get("tenantId")
@@ -328,17 +332,35 @@ def stage_report(run: Run, open_browser: bool = False, output: Optional[str] = N
         raise
 
 
+def _report_targets(output: Optional[str]) -> Tuple[Optional[Path], Optional[Path]]:
+    """(html, pdf) paths for --output: a .pdf value names the PDF (HTML beside it); other names get .html."""
+    if not output:
+        return None, None
+    out = Path(output).expanduser().resolve()
+    suffix = out.suffix.lower()
+    if suffix == ".pdf":
+        return out.with_suffix(".html"), out
+    if suffix not in (".html", ".htm"):
+        out = out.with_name(out.name + ".html")
+    return out, None
+
+
 def _stage_report(run: Run, open_browser: bool, output: Optional[str], pdf: bool) -> Tuple[Path, Optional[Path]]:
     from . import report
     run.set_stage("report", "running", startedAt=util.iso())
-    path = report.render_run(run.dir, output=Path(output).expanduser().resolve() if output else None)
+    html_out, pdf_out = _report_targets(output)
+    path = report.render_run(run.dir, output=html_out)
     util.ok(f"HTML report: {path}")
-    pdf_path = report.build_pdf(run.dir, path) if pdf else None
+    pdf_path = report.build_pdf(run.dir, path, pdf_out) if pdf else None
     if pdf_path:
         util.ok(f"PDF report: {pdf_path}")
+    elif pdf and not report.find_browser():
+        util.warn("PDF not produced: it needs Microsoft Edge, Google Chrome or Chromium. The HTML report prints to "
+                  "PDF from any browser (Print > Save as PDF).")
     elif pdf:
-        util.warn("PDF not produced (needs Microsoft Edge, Google Chrome or Chromium); the HTML report prints to PDF "
-                  "from any browser (Print > Save as PDF).")
+        util.warn("PDF export failed (the browser produced no file) - the HTML report is complete.")
+    elif (pdf_out or path.with_suffix(".pdf")).exists():
+        util.warn(f"{(pdf_out or path.with_suffix('.pdf')).name} is from an earlier render and was not updated (--no-pdf)")
 
     def rel(p: Path) -> str:
         return str(p.relative_to(run.dir)) if p.is_relative_to(run.dir) else str(p)
@@ -640,7 +662,7 @@ def _add_checklist_args(p: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="azgov-assess",
                                      description="Azure governance assessment: AzGovViz + Azure review checklists "
-                                                 "-> scored HTML report.")
+                                                 "-> scored PDF + HTML report.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--verbose", "-v", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -673,9 +695,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--baseline", help="Previous run folder to compare against (trend)")
     p.set_defaults(func=cmd_analyze)
 
-    p = sub.add_parser("report", help="(Re)render the HTML report (merges analysis/ai-insights.json if present)")
+    p = sub.add_parser("report", help="(Re)render the PDF and HTML report (merges analysis/ai-insights.json if present)")
     p.add_argument("--run-dir")
-    p.add_argument("--output", help="Explicit output HTML path")
+    p.add_argument("--output", help="Output path: name.html (PDF written beside it) or name.pdf (HTML beside it)")
     p.add_argument("--reanalyze", action="store_true", help="Re-run the analysis stage first")
     p.add_argument("--baseline", help="Previous run folder to compare against (implies --reanalyze)")
     p.add_argument("--no-pdf", dest="pdf", action="store_false",

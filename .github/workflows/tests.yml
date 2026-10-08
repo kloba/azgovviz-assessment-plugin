@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]  # 24.04: setup-python has no 3.9 build for newer Ubuntu images
         python: ["3.9", "3.13"]
         include:
           - os: macos-latest

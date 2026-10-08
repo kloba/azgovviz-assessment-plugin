@@ -4,7 +4,7 @@ argument-hint: "[tenant-id] [--checklists alz,waf,aprl,aks] [--subscriptions id1
 ---
 
 Use the `azure-review-checklists` skill to evaluate Azure/review-checklists items against the tenant with
-Azure Resource Graph and produce the HTML report (Resource-Graph-only mode, AzGovViz is skipped).
+Azure Resource Graph and produce the PDF and HTML report (Resource-Graph-only mode, AzGovViz is skipped).
 
 Arguments from the user (may be empty): $ARGUMENTS
 
