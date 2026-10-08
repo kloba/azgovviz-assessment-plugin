@@ -137,7 +137,8 @@ def fmt_int(n: Any) -> str:
 
 
 def fmt_score(s: Optional[float]) -> str:
-    return "–" if s is None else (f"{s:.0f}" if abs(s - round(s)) < 0.05 else f"{s:.1f}")
+    # one decimal everywhere, so a column of scores lines up (68.0 next to 68.7); a full score is just 100
+    return "–" if s is None else ("100" if s >= 99.95 else f"{s:.1f}")
 
 
 def band_color(score: Optional[float]) -> str:
@@ -583,7 +584,7 @@ class Report:
         if qw:
             lis = "".join(f'<li><a href="#F-{esc(x["id"])}">{esc(x["title"])}</a> <span class="small muted">– '
                           f'{esc(x.get("recommendation", ""))}</span></li>' for x in qw[:8])
-            quick = (f'<div class="card pad" style="margin-top:16px"><h3>Quick wins</h3><p class="small ink2" '
+            quick = (f'<div class="card pad quick-card" style="margin-top:16px"><h3>Quick wins</h3><p class="small ink2" '
                      f'style="margin:4px 0 8px">Low-effort fixes for medium-or-higher gaps.</p>'
                      f'<ul class="quick">{lis}</ul></div>')
         return f"""
@@ -755,7 +756,13 @@ class Report:
             assist = ""
             if i.get("assistedBy"):
                 assist = (f'<p><b>Assessed via finding</b> {self.finding_link(i["assistedBy"])} – {esc(i.get("assistedSummary") or "")}</p>')
-            q = f'<div class="f-label" style="margin-top:10px">Resource Graph query</div><pre>{esc(i["query"])}</pre>' if i.get("query") else ""
+            fix = i.get("correction") or {}
+            q_label = "Resource Graph query (corrected)" if fix.get("action") == "corrected" else "Resource Graph query"
+            q = f'<div class="f-label" style="margin-top:10px">{q_label}</div><pre>{esc(i["query"])}</pre>' if i.get("query") else ""
+            if fix:
+                assist += f'<p><b>Upstream query {esc(fix.get("action"))}.</b> {esc(fix.get("reason"))}</p>'
+                if fix.get("upstreamQuery"):
+                    q += f'<div class="f-label" style="margin-top:10px">Upstream query (not used)</div><pre>{esc(fix["upstreamQuery"])}</pre>'
             err = f'<p><b>Query error:</b> {esc(i["error"])}</p>' if i.get("error") else ""
             links = " · ".join(f'<a href="{esc(u)}" target="_blank" rel="noopener">{lbl}</a>'
                                for lbl, u in (("Learn more", safe_url(i.get("link"))),
@@ -769,7 +776,7 @@ class Report:
             dom = i.get("domain") or ""
             trs.append(f"""
 <tr class="item-row" data-status="{esc(st)}" data-severity="{esc((i.get('severity') or '').lower())}" data-checklist="{esc(c['key'])}" data-domain="{esc(dom)}" data-text="{esc(text)}">
-  <td>{cl_chip(st)}{'<span class="assist">via finding</span>' if i.get('assistedBy') else ''}</td>
+  <td>{cl_chip(st)}{'<span class="assist">via finding</span>' if i.get('assistedBy') else ''}{f'<span class="assist">query {esc(fix.get("action"))}</span>' if fix else ''}</td>
   <td>{sev_chip((i.get('severity') or 'info').lower())}</td>
   <td><button type="button" class="row-toggle" aria-expanded="false">{esc(i.get('text'))}</button><div class="small muted">{esc(c['key'].upper())} · {esc(i.get('id') or i.get('guid', '')[:8])} · {esc(i.get('category'))}{(' · ' + esc(i.get('subcategory'))) if i.get('subcategory') else ''}</div></td>
   <td class="num nowrap small">{counts_txt}</td>
@@ -906,12 +913,26 @@ class Report:
         if (src.get("inventory") or {}).get("available"):
             steps.append("<li><b>Azure Resource Graph</b> provided inventory, Defender for Cloud, Advisor, policy-state and "
                          "configuration evidence.</li>")
+        corrections = cls.get("corrections") or []
         if cls.get("available"):
             keys = ", ".join(c.get("key", "").upper() for c in (self.cl or {}).get("checklists", []))
             commit = f" from commit <code>{esc((clsrc.get('commit') or '')[:7])}</code>" if clsrc.get("commit") else ""
+            fixed = (f" {len(corrections)} upstream {'query that does' if len(corrections) == 1 else 'queries that do'} "
+                     f"not test what the item says {'was' if len(corrections) == 1 else 'were'} corrected or set aside "
+                     "(listed below).") if corrections else ""
             steps.append(f"<li><b>Azure review checklists</b> ({esc(keys)}) were evaluated with "
-                         f"{fmt_int(q.get('unique'))} Resource Graph queries{commit}.</li>")
+                         f"{fmt_int(q.get('unique'))} Resource Graph queries{commit}.{fixed}</li>")
         steps = "".join(steps)
+        corr_card = ""
+        if corrections:
+            rows = [[f"{'/'.join(k.upper() for k in c.get('checklists') or [])} {c.get('id') or (c.get('guid') or '')[:8]}",
+                     c.get("text"), c.get("action"), c.get("reason")] for c in corrections]
+            corr_card = f"""
+  <div class="card pad corr-card" style="margin-top:16px"><h3>Checklist query corrections</h3>
+    <p class="small ink2" style="margin:6px 0 10px">These Azure/review-checklists queries do not test what their item says, so a
+    corrected query ran instead, or the item was set aside for manual review. A correction stops applying once the upstream
+    query no longer has the defect.</p>
+    {data_table(["Item", "Recommendation", "Action", "Why"], rows, cls="data corr-table", label="Checklist query corrections")}</div>"""
         return f"""
 <section class="block" id="method">
   <div class="section-head"><div><h2>Method and sources</h2></div></div>
@@ -933,7 +954,7 @@ class Report:
         <dt>Raw data</dt><dd>{' · '.join(links)}</dd>
       </dl>
       <h3 style="margin-top:18px">Limitations</h3><ul class="small" style="margin:8px 0 0">{lim}</ul></div>
-  </div>
+  </div>{corr_card}
 </section>"""
 
     # -- page --

@@ -107,6 +107,208 @@ CONTAINER_TYPES = {
     "microsoft.resources/resourcegroups": "microsoft.resources/subscriptions/resourcegroups",
 }
 
+# Upstream queries that do not test what their item says (each replacement query was run against a live tenant).
+# A correction applies only while the upstream query still contains the defect (`defect` regex), so a fix in
+# Azure/review-checklists takes over automatically. With `query` the corrected query runs instead, `replace`
+# ([regex, text]) edits the upstream query; with neither the item is set aside for manual review. Every
+# correction is listed in results.json and the report.
+QUERY_CORRECTIONS: Dict[str, Dict[str, Any]] = {
+    # "Require HTTPS, i.e. disable port 80 on the storage account"
+    "e7a8dc4a-20e2-47c3-b297-11b1352beee0": {
+        "defect": r"compliant\s*=\s*\(\s*properties\.supportsHttpsTrafficOnly\s*==\s*false\s*\)",
+        "reason": "The upstream query is inverted: it marks storage accounts that accept only HTTPS as non-compliant.",
+        "query": "resources | where type =~ 'Microsoft.Storage/StorageAccounts' "
+                 "| extend compliant = coalesce(tobool(properties.supportsHttpsTrafficOnly), true) | distinct id, compliant",
+    },
+    # "Enable Microsoft Defender for all of your storage accounts"
+    "fc5972cd-4cd2-41b0-a803-7f5e6b4bfd3d": {
+        "defect": r"resourceContainers\s*\|\s*where\s+type\s*==\s*'microsoft\.security/pricings'",
+        "reason": "The upstream query looks for the Defender plan in the wrong table and joins it on the storage account "
+                  "ID, so every storage account fails. The corrected query checks the subscription's Defender for "
+                  "Storage plan.",
+        "query": "resources | where type =~ 'Microsoft.Storage/StorageAccounts' | project id, subscriptionId "
+                 "| join kind=leftouter (securityresources | where type =~ 'microsoft.security/pricings' "
+                 "and name =~ 'StorageAccounts' | project subscriptionId, pricingTier = tostring(properties.pricingTier)) "
+                 "on subscriptionId | extend compliant = (pricingTier =~ 'Standard') | distinct id, compliant",
+    },
+    # ALZ D03.02 "Use IP addresses from the address allocation ranges for private internets (RFC 1918)"
+    "3f630472-2dd6-49c5-a5c2-622f54b69bad": {
+        "defect": r"matches\s+regex\s+@'[^']*\\\\\.",  # `\\.` inside a verbatim @'...' string
+        "reason": "The upstream regular expression is escaped twice inside a verbatim string, so no address range "
+                  "ever matches and every virtual network fails.",
+        "query": "resources | where type =~ 'microsoft.network/virtualnetworks' "
+                 "| mv-expand addressPrefix = properties.addressSpace.addressPrefixes "
+                 "| extend cidr = tostring(addressPrefix) | where cidr !contains ':' "
+                 "| extend compliant = (cidr matches regex @'^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)') "
+                 "| project id, compliant, cidr",
+    },
+    # "Public IP assignment to VM running SAP Workload is not recommended."
+    "82734c88-6ba2-4802-8459-11475e39e530": {
+        "defect": r"publicIPAddresses'\s+and\s+sku\.tier\s*=~\s*'Regional'",
+        "reason": "The upstream query lists public IP addresses that are not zone-redundant; it does not look at VMs "
+                  "running SAP, so its result says nothing about this item.",
+    },
+    # "Deploy both VMs in the high-availability pair in an availability set or in availability zones." (SAP)
+    "f656e745-0cfb-453e-8008-0528fa21c933": {
+        "defect": r"Microsoft\.Storage/storageAccounts'\s*\|\s*where\s+sku\.name\s+in~\s*\(\s*'Standard_LRS'",
+        "reason": "The upstream query lists locally redundant storage accounts; it does not look at SAP "
+                  "high-availability VM pairs.",
+    },
+    # SAP: "Leverage Azure resource tag for cost categorization and resource grouping (...)"
+    "4e138115-2318-41aa-9174-26943ff8ae7d": {
+        "defect": r"resources\s*\|\s*extend\s+compliant\s*=\s*isnotnull\(\s*\['tags'\]\s*\)",
+        "reason": "The upstream query checks whether every resource in the scope has any tag; it is not limited to SAP "
+                  "resources and does not look for the tags the item names.",
+    },
+    # SAP: "Azure tagging can be leveraged to logically group and track resources, ..."
+    "579266bc-ca27-45fa-a1ab-fe9d55d04c3c": {
+        "defect": r"resources\s*\|\s*extend\s+compliant\s*=\s*isnotnull\(\s*\['tags'\]\s*\)",
+        "reason": "The upstream query checks whether every resource in the scope has any tag; it is not limited to SAP "
+                  "resources.",
+    },
+    # "Ensure that APIs and endpoints used by the LLM application are properly secured with authentication ..."
+    "1102cac6-eae0-41e6-b842-e52f4721d928": {
+        "defect": r"compliant\s*=\s*\(\s*isnotnull\(\s*identity\s*\)\s*\)",
+        "reason": "The upstream query checks whether the AI or Search resource has a managed identity of its own, which "
+                  "says nothing about how endpoints are secured. Azure AI and Search endpoints always require a key or "
+                  "Microsoft Entra ID; the application's own API is not visible in Resource Graph.",
+    },
+    # "Use Premium and Standard tiers for staging slots and automated backups."
+    "e4b31c6a-2e3f-4df1-8e8b-9c3aa5a27820": {
+        "defect": r"sku\.tier\s*==\s*'Premium'\s+or\s+sku\.tier\s*==\s*'Standard'",
+        "reason": "The upstream query accepts only the exact tier names 'Premium' and 'Standard', so PremiumV2/V3, "
+                  "Isolated and Elastic Premium plans, which support slots and backups, fail.",
+        "query": "resources | where type =~ 'microsoft.web/serverfarms' | extend tier = tostring(sku.tier) "
+                 "| extend compliant = (tier startswith 'Premium' or tier startswith 'Standard' or tier startswith "
+                 "'Isolated' or tier in~ ('ElasticPremium', 'WorkflowStandard')) | distinct id, tier, compliant",
+    },
+    # ALZ D07.08 "For subnets in VNets not connected to Virtual WAN, attach a route table ..."
+    "a3784907-9836-4271-aafc-93535f8ec08b": {
+        "defect": r"kind\s*=\s*fullouter[\s\S]*remotevnettohubpeering",
+        "reason": "For peered virtual networks the upstream query adds the gateway, firewall and Bastion subnets back "
+                  "through a full outer join, so a peered hub network fails even when every other subnet has a route "
+                  "table.",
+        "query": "resources | where type =~ 'microsoft.network/virtualnetworks' "
+                 "| extend isVWANpeer = tolower(tostring(properties.virtualNetworkPeerings)) contains 'remotevnettohubpeering' "
+                 "| mv-expand subnet = properties.subnets "
+                 "| extend subnetId = tostring(subnet.id), subnetName = tostring(subnet.name) "
+                 "| where isnotempty(subnetId) and subnetName !in~ ('GatewaySubnet', 'AzureFirewallSubnet', "
+                 "'AzureFirewallManagementSubnet', 'RouteServerSubnet', 'AzureBastionSubnet') "
+                 "| project id, subnetId, compliant = (isnotempty(tostring(subnet.properties.routeTable.id)) or isVWANpeer)",
+    },
+    # APRL "Deploy Network Watcher in all regions where you have networking services"
+    "4e133bd0-8762-bc40-a95b-b29142427d73": {
+        "defect": r'where\s+location\s*!=\s*"global"\s*\|\s*union',
+        "reason": "The upstream query counts every resource type in every location, so a resource in a geography such "
+                  "as 'unitedstates' (an Entra tenant, for example) shows up as a region without Network Watcher. The "
+                  "corrected query checks network resources per subscription and region.",
+        "query": "resources | where type startswith 'microsoft.network/' and type !~ 'microsoft.network/networkwatchers' "
+                 "and isnotempty(location) and location !~ 'global' | distinct subscriptionId, location "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.network/networkwatchers' "
+                 "| project subscriptionId, location, watcher = id) on subscriptionId, location "
+                 "| where isempty(watcher) "
+                 "| project recommendationId = '4e133bd0-8762-bc40-a95b-b29142427d73', name = location, "
+                 "id = strcat('/subscriptions/', subscriptionId, '/locations/', location), "
+                 "param1 = strcat('LocationMissingNetworkWatcher:', location)",
+    },
+    # APRL "Configure network access restrictions" (App Service)
+    "aab6b4a4-9981-43a4-8728-35c7ecbb746d": {
+        "defect": r"join\s+kind\s*=\s*inner[\s\S]*isnotnull\(\s*IpSecurityRestrictions\s*\)",
+        "reason": "The upstream query flags every app that has any access-restriction entry, so apps with real "
+                  "restrictions fail too (App Service always returns at least the default 'Allow all' rule). The "
+                  "corrected query flags apps open to public traffic with no rule other than 'Allow all'.",
+        "query": "resources | where type =~ 'microsoft.web/sites' and properties.kind has 'app' "
+                 "| project name, id, tags, subscriptionId, publicAccess = tostring(properties.publicNetworkAccess) "
+                 "| join kind=leftouter (appserviceresources | where type =~ 'microsoft.web/sites/config' "
+                 "| mv-expand rule = properties.IpSecurityRestrictions "
+                 "| extend ip = tostring(rule.IpAddress), action = tostring(rule.Action) "
+                 "| summarize rules = countif(isnotnull(rule) and not(ip =~ 'Any' and action =~ 'Allow')), "
+                 "defaultAction = take_any(tostring(properties.IpSecurityRestrictionsDefaultAction)) by name, subscriptionId) "
+                 "on name, subscriptionId "
+                 "| where publicAccess !~ 'Disabled' and defaultAction !~ 'Deny' and coalesce(rules, 0) == 0 "
+                 "| project recommendationId = 'aab6b4a4-9981-43a4-8728-35c7ecbb746d', name, id, tags, "
+                 "param1 = 'No network restrictions set'",
+    },
+    # APRL "Set minimum instance count to 2 for app service"
+    "9e6682ac-31bc-4635-9959-ab74b52454e6": {
+        "defect": r"PreWarmedInstanceCount\s*<\s*2",
+        "reason": "The upstream query reads the pre-warmed instance count, which only Elastic Premium plans use, so "
+                  "every web app fails. The corrected query checks the instance count of the app's App Service plan.",
+        "query": "resources | where type =~ 'microsoft.web/sites' and properties.kind has 'app' "
+                 "| extend planId = tolower(tostring(properties.serverFarmId)) "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.web/serverfarms' "
+                 "| project planId = tolower(id), instances = toint(sku.capacity)) on planId "
+                 "| where instances < 2 "
+                 "| project recommendationId = '9e6682ac-31bc-4635-9959-ab74b52454e6', name, id, tags, "
+                 "param1 = strcat('App Service plan instances: ', instances)",
+    },
+    # APRL "Configure NSG Flow Logs"
+    "da1a3c06-d1d5-a940-9a99-fcc05966fe7c": {
+        "defect": r"on\s+\$left\.lowerCaseNsgId\s*==\s*\$right\.lowerCaseTargetNsgId",
+        "reason": "The upstream query accepts only NSG flow logs, which can no longer be created (virtual network flow "
+                  "logs replace them). The corrected query also accepts an enabled flow log on the NSG's subnet or "
+                  "virtual network.",
+        "query": "resources | where type =~ 'microsoft.network/networksecuritygroups' "
+                 "| project name, id, tags, subnets = properties.subnets "
+                 "| mv-expand subnet = iff(array_length(subnets) > 0, subnets, dynamic([{}])) "
+                 "| extend subnetId = tolower(tostring(subnet.id)) "
+                 "| extend vnetId = iff(isempty(subnetId), '', strcat_array(array_slice(split(subnetId, '/'), 0, 8), '/')) "
+                 "| mv-expand target = pack_array(tolower(id), subnetId, vnetId) to typeof(string) "
+                 "| where isnotempty(target) "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.network/networkwatchers/flowlogs' "
+                 "and properties.enabled == true | project target = tolower(tostring(properties.targetResourceId)), "
+                 "flowLog = name) on target "
+                 "| summarize covered = countif(isnotempty(flowLog)) by name, id "
+                 "| where covered == 0 "
+                 "| project recommendationId = 'da1a3c06-d1d5-a940-9a99-fcc05966fe7c', name, id, "
+                 "param1 = 'Flow logs (NSG, subnet or virtual network): not configured or disabled'",
+    },
+    # APRL "Configure monitoring for all Azure Virtual Machines"
+    "4a9d8973-6dba-0042-b3aa-07924877ebd5": {
+        "defect": r"properties\.publisher\s*=~\s*\"Microsoft\.Azure\.Diagnostics\"",
+        "reason": "The upstream query recognises only the Azure Diagnostics extension, which Azure retired on "
+                  "31 March 2026, so VMs monitored with the Azure Monitor Agent fail. The corrected query checks for the "
+                  "Azure Monitor Agent and data collection rules that collect performance counters and event logs or "
+                  "syslog.",
+        "query": "resources | where type =~ 'microsoft.compute/virtualmachines' "
+                 "| project name, id, tags, idVm = tolower(id) "
+                 "| join kind=leftouter (insightsresources | where type =~ 'microsoft.insights/datacollectionruleassociations' "
+                 "| extend lid = tolower(id) | where lid contains '/providers/microsoft.compute/virtualmachines/' "
+                 "| project idVm = substring(lid, 0, indexof(lid, '/providers/microsoft.insights/datacollectionruleassociations/')), "
+                 "idDcr = tolower(tostring(properties.dataCollectionRuleId)) "
+                 "| join kind=inner (resources | where type =~ 'microsoft.insights/datacollectionrules' "
+                 "| project idDcr = tolower(id), perf = toint(array_length(properties.dataSources.performanceCounters) > 0), "
+                 "logs = toint(array_length(properties.dataSources.windowsEventLogs) > 0 "
+                 "or array_length(properties.dataSources.syslog) > 0)) "
+                 "on idDcr | summarize hasPerf = max(perf), hasLogs = max(logs) by idVm) on idVm "
+                 "| join kind=leftouter (resources | where type =~ 'microsoft.compute/virtualmachines/extensions' "
+                 "and tostring(properties.type) in~ ('AzureMonitorWindowsAgent', 'AzureMonitorLinuxAgent') "
+                 "| extend lid = tolower(id) | summarize agents = count() by idVm = substring(lid, 0, indexof(lid, '/extensions/'))) "
+                 "on idVm "
+                 "| where coalesce(agents, 0) == 0 or coalesce(hasPerf, 0) == 0 or coalesce(hasLogs, 0) == 0 "
+                 "| project recommendationId = '4a9d8973-6dba-0042-b3aa-07924877ebd5', name, id, tags, "
+                 "param1 = strcat('Azure Monitor Agent: ', iff(coalesce(agents, 0) > 0, 'installed', 'missing')), "
+                 "param2 = strcat('Performance counters collected: ', iff(coalesce(hasPerf, 0) > 0, 'yes', 'no')), "
+                 "param3 = strcat('Event logs or syslog collected: ', iff(coalesce(hasLogs, 0) > 0, 'yes', 'no'))",
+    },
+    # APRL "Enable zone redundancy" (Container Registry)
+    "63491f70-22e4-3b4a-8b0c-845450e46fac": {
+        "defect": r"properties\.zoneRedundancy\s*!=\s*\"Enabled\"",
+        "reason": "Container registries are zone-redundant by default in every region with availability zones, whatever "
+                  "the legacy zoneRedundancy property says, so the upstream query flags protected registries. Resource "
+                  "Graph cannot tell which regions have availability zones.",
+    },
+    # WAF / AVS "Ensure alerts are configured for Azure Service Health alerts and notifications"
+    "64b0d934-a348-4726-be79-d6b5c3a36495": {
+        "defect": r"^\s*resources\s*\|\s*distinct\s+subscriptionId\s*\|\s*join",
+        "reason": "The upstream query checks every subscription, although the item belongs to the Azure VMware Solution "
+                  "guide. The corrected query checks only subscriptions with an Azure VMware Solution private cloud "
+                  "(Service Health alerting in general is a separate finding).",
+        "replace": [r"^\s*resources\s*\|\s*distinct\s+subscriptionId",
+                    "resources | where type =~ 'microsoft.avs/privateclouds' | distinct subscriptionId"],
+    },
+}
+
 
 # ----------------------------------------------------------------------------------------------
 # Download / cache
@@ -216,6 +418,18 @@ def runnable_query(graph: Optional[str]) -> Optional[str]:
     return graph.strip()
 
 
+def corrected_query(item: Dict[str, Any], query: Optional[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """(query to run, correction applied). The correction is None when the upstream query is used as is;
+    a correction without a query means the item is set aside for manual review."""
+    fix = QUERY_CORRECTIONS.get(str(item.get("guid") or "").lower())
+    if not query or not fix or not re.search(fix["defect"], query, re.I):
+        return query, None
+    if fix.get("replace"):  # a targeted edit of the upstream query
+        pattern, repl = fix["replace"]
+        return re.sub(pattern, lambda _: repl, query, count=1, flags=re.I), fix
+    return fix.get("query"), fix
+
+
 # `//` comments, but not the `//` of a URL inside a string literal (https://...)
 _KQL_COMMENT = re.compile(r"(?<![:'\"])//.*$", re.M)
 
@@ -243,6 +457,12 @@ def _row_verdict(row: Dict[str, Any]) -> Optional[bool]:
         if str(key).lower() == "compliant":
             return util.truthy(value)
     return None
+
+
+def _phantom(row: Dict[str, Any]) -> bool:
+    """A row that names nothing but a verdict: `summarize arg_max(id, *)` without `by` returns one even when no
+    resource matched, which must not count as a non-compliant resource."""
+    return all(v is None or v == "" for k, v in row.items() if str(k).lower() != "compliant")
 
 
 def _row_id(row: Dict[str, Any]) -> str:
@@ -293,6 +513,7 @@ def target_types(item: Dict[str, Any]) -> List[str]:
 def evaluate_rows(item: Dict[str, Any], query: str, rows: List[Dict[str, Any]],
                   type_counts: Optional[Dict[str, int]], truncated: bool = False,
                   max_resources: int = 60) -> Dict[str, Any]:
+    rows = [r for r in rows if not _phantom(r)]
     mode = query_mode(item, query, rows)
     types = target_types(item)
     known_types = type_counts is not None and bool(types)
@@ -392,7 +613,7 @@ class ChecklistEvaluator:
         jobs: List[str] = []
         for _, data in loaded:
             for item in data.get("items", []):
-                q = runnable_query(item.get("graph"))
+                q, _ = corrected_query(item, runnable_query(item.get("graph")))
                 if q:
                     jobs.append(q)
         unique = list(dict.fromkeys(jobs))
@@ -411,6 +632,17 @@ class ChecklistEvaluator:
         checklists = []
         for key, data in loaded:
             checklists.append(self._build(key, data))
+        corrections: Dict[str, Dict[str, Any]] = {}
+        for c in checklists:
+            for i in c["items"]:
+                if i.get("correction"):
+                    entry = corrections.setdefault(i["guid"], {"guid": i["guid"], "id": i.get("id"), "text": i["text"],
+                                                               **{k: i["correction"][k] for k in ("action", "reason")},
+                                                               "checklists": []})
+                    entry["checklists"].append(c["key"])
+        if corrections:
+            util.log(f"review-checklists: {len(corrections)} upstream quer{'y' if len(corrections) == 1 else 'ies'} "
+                     "corrected or set aside (they do not test what their item says)")
         return {
             "schema": "azgov-assess/checklists@1",
             "generatedAt": util.iso(),
@@ -420,6 +652,7 @@ class ChecklistEvaluator:
             "scope": self.client.scope.describe(),
             "queries": {"unique": len(unique), "apiCalls": self.client.calls,
                         "durationSec": round(time.time() - started, 1)},
+            "corrections": list(corrections.values()),
             "checklists": checklists,
         }
 
@@ -427,7 +660,8 @@ class ChecklistEvaluator:
         meta = data.get("metadata") or {}
         items_out = []
         for item in data.get("items", []):
-            q = runnable_query(item.get("graph"))
+            upstream = runnable_query(item.get("graph"))
+            q, fix = corrected_query(item, upstream)
             base = {
                 "guid": item.get("guid"), "id": item.get("id"),
                 "category": item.get("category") or item.get("recommendationControl") or item.get("waf") or "General",
@@ -440,6 +674,9 @@ class ChecklistEvaluator:
                 "training": item.get("training"),
                 "benefits": item.get("potentialBenefits"),
             }
+            if fix:
+                base["correction"] = {"action": "corrected" if q else "set aside", "reason": fix["reason"],
+                                      "upstreamQuery": upstream}
             if not q:
                 base.update({"automated": False, "status": "manual", "mode": None})
             else:

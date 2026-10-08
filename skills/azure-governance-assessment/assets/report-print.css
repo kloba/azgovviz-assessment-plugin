@@ -104,6 +104,8 @@ section.block > .section-head p { font-size: 12px; max-width: none; }
 .plate-foot > div { padding: 8px 10px; border-bottom: 0 !important; border-right: 1px solid var(--rule-strong) !important; }
 .plate-foot > div:last-child { border-right: 0 !important; }
 .plate-foot .value { font-size: 20px; }
+/* labels are single words such as SUBSCRIPTIONS - they must not break mid-word in a sixth of the page */
+.plate-foot .label { font-size: 8.5px; letter-spacing: .06em; overflow-wrap: normal; }
 .sev-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 8px; margin-top: 10px; }
 .sev-tile { padding: 9px 12px; break-inside: avoid; }
 .sev-tile .value { font-size: 24px; }
@@ -136,6 +138,8 @@ section.block > .section-head p { font-size: 12px; max-width: none; }
 .risk dl { grid-template-columns: 100px minmax(0, 1fr); font-size: 12px; }
 .phase { padding: 11px 14px; break-inside: auto; }
 .phase li { break-inside: avoid; padding: 7px 0 7px 28px; }
+/* at most eight short items: moving the card whole beats leaving one bullet alone on the next page */
+.quick-card, .corr-card { break-inside: avoid; }
 .phase li::before { top: 8px; }
 
 /* findings: full cards for gaps, one line for passed / informational checks */

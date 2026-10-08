@@ -233,6 +233,9 @@ table.data td.num, table.data th.num { text-align: right; }
 .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .cat-table td .mini { width: 140px; height: 10px; }  /* keeps .stackbar flex layout */
 .items-table td:first-child { width: 120px; }
+.corr-table td:nth-child(1), .corr-table td:nth-child(3) { white-space: nowrap; overflow-wrap: normal; }
+.corr-table th:nth-child(2), .corr-table td:nth-child(2) { width: 30%; }
+.corr-table th:nth-child(4), .corr-table td:nth-child(4) { width: 50%; }
 .items-table tr.item-row { cursor: pointer; }
 .row-toggle { all: unset; display: block; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
 .row-toggle:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 3px; }

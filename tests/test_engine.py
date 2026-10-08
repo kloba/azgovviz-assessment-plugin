@@ -36,6 +36,12 @@ class ChecklistEvaluationTests(unittest.TestCase):
         out = cl.evaluate_rows(item, item["graph"], rows, {})
         self.assertEqual(out["status"], "non_compliant")
 
+    def test_verdict_only_row_is_not_a_resource(self):
+        # `summarize arg_max(id, *)` without `by` returns one empty row although nothing matched
+        item = {"graph": "resources | summarize arg_max(id, *) | extend compliant = false", "service": "Azure Service Fabric"}
+        out = cl.evaluate_rows(item, item["graph"], [{"compliant": "0", "id": ""}], {"microsoft.compute/disks": 2})
+        self.assertEqual((out["status"], out["counts"]["resources"]), ("not_applicable", 0))
+
     def test_compliant_column_no_rows_and_absent_type_is_not_applicable(self):
         item = {"graph": "resources | where type =~ 'microsoft.network/azurefirewalls' | extend compliant = 1",
                 "arm-service": "microsoft.network/azurefirewalls"}
@@ -104,6 +110,79 @@ class ChecklistEvaluationTests(unittest.TestCase):
             {"guid": "g1", "resources": [{"id": "r1", "compliant": True}, {"id": "r2", "compliant": None}]}]}]}
         out = cl.official_graph_results(res, "alz")
         self.assertEqual(out["checks"], [{"guid": "g1", "compliant": "true", "id": "r1"}])
+
+
+class QueryCorrectionTests(unittest.TestCase):
+    UPSTREAM = {k: v for k, v in json.loads(
+        (ROOT / "tests" / "fixtures" / "upstream_defective_queries.json").read_text(encoding="utf-8")).items()
+        if not k.startswith("_")}
+
+    def test_every_correction_matches_its_published_query(self):
+        self.assertEqual(set(cl.QUERY_CORRECTIONS), set(self.UPSTREAM), "each correction needs an upstream fixture")
+        for guid, up in self.UPSTREAM.items():
+            q, fix = cl.corrected_query({"guid": guid}, up["graph"])
+            self.assertIs(fix, cl.QUERY_CORRECTIONS[guid], guid)
+            if fix.get("replace"):
+                self.assertNotEqual(q, up["graph"], guid)
+                self.assertIn(fix["replace"][1], q, guid)
+            else:
+                self.assertEqual(q, fix.get("query"), guid)
+            if q:  # a corrected query must not carry the defect it replaces
+                self.assertIsNone(cl.corrected_query({"guid": guid}, q)[1], guid)
+
+    def test_correction_stops_once_upstream_is_fixed(self):
+        guid = "e7a8dc4a-20e2-47c3-b297-11b1352beee0"
+        fixed = self.UPSTREAM[guid]["graph"].replace("== false", "== true")
+        self.assertEqual(cl.corrected_query({"guid": guid}, fixed), (fixed, None))
+        # other items are never touched, even with an identical query
+        self.assertEqual(cl.corrected_query({"guid": "other"}, self.UPSTREAM[guid]["graph"])[1], None)
+
+    def test_rfc1918_regex_is_single_escaped_in_the_verbatim_string(self):
+        q, _ = cl.corrected_query({"guid": "3f630472-2dd6-49c5-a5c2-622f54b69bad"},
+                                  self.UPSTREAM["3f630472-2dd6-49c5-a5c2-622f54b69bad"]["graph"])
+        self.assertIn(r"@'^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'", q)
+
+    def test_evaluator_runs_corrected_queries_and_reports_them(self):
+        https, sap = "e7a8dc4a-20e2-47c3-b297-11b1352beee0", "82734c88-6ba2-4802-8459-11475e39e530"
+        data = {"items": [
+            {"guid": https, "text": "Require HTTPS", "severity": "High", "service": "Storage",
+             "graph": self.UPSTREAM[https]["graph"]},
+            {"guid": sap, "text": "SAP public IP", "severity": "High", "service": "SAP",
+             "graph": self.UPSTREAM[sap]["graph"]},
+            {"guid": "plain", "text": "Plain", "graph": "resources | extend compliant = 1 | project id, compliant"},
+        ]}
+        ran = []
+
+        class Client:
+            calls = 0
+            scope = type("S", (), {"describe": lambda self, *a: "test scope"})()
+
+            def query(self, kql):
+                ran.append(kql)
+                rows = [{"id": "/subscriptions/1/sa", "compliant": 1 if "coalesce" in kql else 0}]
+                return type("R", (), {"rows": rows, "truncated": False, "elapsed": 0.0})()
+
+        class Source:
+            ref, commit, commit_date, local = "main", None, None, None
+
+            def load(self, key):
+                return data
+
+            def path_for(self, key):
+                return f"checklists/{key}_checklist.en.json"
+
+        res = cl.ChecklistEvaluator(Client(), Source(), {"microsoft.storage/storageaccounts": 1}).evaluate(["waf"], progress=False)
+        items = {i["guid"]: i for i in res["checklists"][0]["items"]}
+        self.assertNotIn(self.UPSTREAM[https]["graph"], ran)
+        self.assertNotIn(self.UPSTREAM[sap]["graph"], ran)
+        self.assertEqual(items[https]["status"], "compliant")
+        self.assertEqual(items[https]["correction"]["action"], "corrected")
+        self.assertEqual(items[https]["correction"]["upstreamQuery"], self.UPSTREAM[https]["graph"])
+        self.assertEqual((items[sap]["status"], items[sap]["automated"]), ("manual", False))
+        self.assertEqual(items[sap]["correction"]["action"], "set aside")
+        self.assertNotIn("correction", items["plain"])
+        self.assertEqual({c["guid"]: c["action"] for c in res["corrections"]}, {https: "corrected", sap: "set aside"})
+        self.assertEqual(res["corrections"][0]["checklists"], ["waf"])
 
 
 class ScoringTests(unittest.TestCase):

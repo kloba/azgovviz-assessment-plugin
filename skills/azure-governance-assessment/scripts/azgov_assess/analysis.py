@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-
 import traceback
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -173,7 +172,8 @@ def analyze_run(run_dir: Path, run_data: Dict[str, Any]) -> Dict[str, Any]:
             "inventory": {"available": bool(inventory), "errors": (inventory or {}).get("errors")},
             "checklists": {"available": bool((checklists or {}).get("checklists")),
                            "source": (checklists or {}).get("source"),
-                           "queries": (checklists or {}).get("queries")},
+                           "queries": (checklists or {}).get("queries"),
+                           "corrections": (checklists or {}).get("corrections") or []},
         },
         "facts": ctx.facts,
         "hierarchy": extra.get("hierarchy"),
@@ -279,6 +279,14 @@ def brief_markdown(result: Dict[str, Any], max_findings: int = 60) -> str:
     lines.append("")
     lines.append("Top failing checklist items (High severity first):")
     lines.extend(_top_checklist_failures(result))
+    corrections = src["checklists"].get("corrections") or []
+    if corrections:
+        lines.append("")
+        lines.append("Upstream checklist queries that azgov-assess corrected or set aside (the results above already "
+                     "use the corrected verdicts - do not report these items as false positives):")
+        for c in corrections:
+            lines.append(f"- [{'/'.join(c.get('checklists') or [])}/{c.get('id') or (c.get('guid') or '')[:8]}] "
+                         f"{c.get('action')}: {(c.get('text') or '')[:120]} - {c.get('reason')}")
     lines.append("")
     t = result.get("trend")
     if t and (t.get("overall") or {}).get("delta") is not None:

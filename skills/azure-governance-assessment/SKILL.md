@@ -136,6 +136,8 @@ prints to PDF from any browser.
 | `AADSTS700082` / refresh token expired (az CLI) | Harmless if Az PowerShell works (`--auth azpwsh`); else `az login --tenant <id>`. |
 | `AuthorizationFailed` at management group | Need Reader on the MG; use `--subscriptions` or ask an admin. |
 | PIM errors in AzGovViz log | Re-run with `--no-pim` (needs Entra ID P2 / Graph permission). |
+| AzGovViz log ends with `Dumping N Errors (handled by …)` | Usually harmless: a missing previous `ResourcesAll.csv` (resource-fluctuation comparison) or a module folder under `/usr/local/share/powershell`. The run's data is complete if the stage is `ok`. |
+| A checklist item looks like a false positive | Read its query in `analysis/checklists.assessed.json`. Known upstream defects are already corrected (`correction` on the item, listed in the report's method section); mention any new one in `notes`, don't count it as a risk. |
 | Checklist download fails (proxy) | Clone github.com/Azure/review-checklists and pass `--checklists-path`. |
 | Very large tenant (>500 subscriptions) | Add `--quick` and `--azgovviz-args '{"LargeTenant": true}'`. |
 

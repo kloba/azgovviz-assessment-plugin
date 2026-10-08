@@ -129,6 +129,12 @@ under the root management group*, *Defender plans on all subscriptions*, *PIM in
 "assessed via finding". `checklists/graph_results_<key>.json` uses the format of the repository's
 `checklist_graph.sh`, so you can import it into the review-checklists Excel workbook.
 
+Some upstream queries do not test what their item says: an inverted HTTPS test, an RFC 1918 regular expression
+that never matches, a VM-monitoring check that only knows the retired Azure Diagnostics extension, SAP items
+that run unrelated queries. These items get a corrected query (run against a live tenant), or are set aside for
+manual review when no reliable query exists (`QUERY_CORRECTIONS` in `checklists.py`). A correction applies only
+while the published query still has the defect, and the report lists every correction with its reason.
+
 ### Scoring
 
 Severity weights high 3 / medium 2 / low 1 (warnings earn half credit). Design-area score = 60% tenant
