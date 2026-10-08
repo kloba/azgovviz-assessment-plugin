@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Azure governance assessment plugin for GitHub Copilot CLI (AzGovViz + Azure review checklists).",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "azgovviz-assessment",
       "description": "Run AzGovViz on a tenant, evaluate Azure/review-checklists with Resource Graph, and produce an AI-analysed governance assessment as a PDF report (plus an interactive HTML version).",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "./",
       "category": "cloud-governance",
       "keywords": ["azure", "governance", "azgovviz", "landing-zone", "review-checklists"]

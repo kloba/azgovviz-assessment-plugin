@@ -6,5 +6,5 @@ evaluation -> deterministic governance analysis -> self-contained HTML assessmen
 Only the Python standard library is used so the engine runs anywhere Python 3.9+ is available.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 TOOL_NAME = "azgovviz-assessment"
