@@ -533,9 +533,12 @@ def cmd_login(args: argparse.Namespace) -> int:
     script = ("$ErrorActionPreference='Stop'; $WarningPreference='SilentlyContinue'; "
               "Update-AzConfig -LoginExperienceV2 Off -Scope Process | Out-Null; "
               "$p = @{ Tenant = $env:AZGOV_PS_TENANT }; "
-              "if ($env:AZGOV_PS_SUBSCRIPTION) { $p.Subscription = $env:AZGOV_PS_SUBSCRIPTION }; "
               "if ($env:AZGOV_PS_DEVICECODE) { $p.UseDeviceAuthentication = $true }; "
               "$c = Connect-AzAccount @p; if (-not $c.Context.Account) { throw 'Sign-in did not complete.' }; "
+              # select the subscription afterwards: Connect-AzAccount -Subscription would discard a successful
+              # sign-in when the chosen account cannot see that subscription
+              "if ($env:AZGOV_PS_SUBSCRIPTION) { try { $null = Set-AzContext -Subscription $env:AZGOV_PS_SUBSCRIPTION } "
+              "catch { Write-Warning \"Signed in, but this account cannot use subscription $env:AZGOV_PS_SUBSCRIPTION\" } }; "
               "\"Signed in: $($c.Context.Account.Id) tenant=$($c.Context.Tenant.Id)\"")
     env = pwsh_env(tenant=args.tenant, subscription=args.subscription, devicecode="1" if args.device_code else "")
     return subprocess.call([pwsh, "-NoLogo", "-NoProfile", "-Command", script], env=env)
