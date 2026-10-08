@@ -270,7 +270,8 @@ def data_table(columns: List[str], rows: List[List[Any]], numeric: Iterable[int]
 # Sections
 # ----------------------------------------------------------------------------------------------
 class Report:
-    def __init__(self, run_dir: Path, out_dir: Optional[Path] = None):
+    def __init__(self, run_dir: Path, out_dir: Optional[Path] = None, toc_pages: Optional[Dict[str, int]] = None):
+        self.toc_pages = toc_pages or {}  # heading text -> PDF page (from a first print pass)
         # links to the run's JSON/CSV files are relative to where the HTML is written (default: <run>/report/)
         self.base = Path(os.path.relpath(run_dir, out_dir or run_dir / "report")).as_posix()
         self.dir = run_dir
@@ -637,7 +638,7 @@ class Report:
             if len(ev["rows"]) > PRINT_EVIDENCE_ROWS:
                 ev_html += (f'<div class="trunc-note print-only">Printed: first {PRINT_EVIDENCE_ROWS} of '
                             f'{max(len(ev["rows"]), ev.get("total", 0)):,} rows. The HTML report lists them all.</div>')
-            ev_html = f'<div><h5>Evidence</h5>{ev_html}</div>'
+            ev_html = f'<div><div class="f-label">Evidence</div>{ev_html}</div>'
         refs = "".join(f'<a href="{esc(safe_url(r.get("url")))}" target="_blank" rel="noopener">{esc(r.get("title"))}</a>'
                        for r in x.get("references") or [] if safe_url(r.get("url")))
         alz = ""
@@ -650,13 +651,13 @@ class Report:
   <summary>
     <span>{status_chip(x['status'])}</span>
     <span>{sev_chip(x['severity'])}</span>
-    <span class="f-main"><div class="f-title">{esc(x['title'])}</div><div class="f-sum">{esc(x.get('summary'))}</div></span>
+    <span class="f-main"><h4 class="f-title"><span class="vh">{esc(x['id'])} · </span>{esc(x['title'])}</h4><div class="f-sum">{esc(x.get('summary'))}</div></span>
     <span class="f-id">{esc(x['id'])}</span>
   </summary>
   <div class="f-body">
     <div class="two">
-      <div><h5>Why it matters</h5><p>{esc(x.get('details') or '—')}</p></div>
-      <div class="fix"><h5>Recommendation</h5><p>{esc(x.get('recommendation') or '—')}</p>
+      <div><div class="f-label">Why it matters</div><p>{esc(x.get('details') or '—')}</p></div>
+      <div class="fix"><div class="f-label">Recommendation</div><p>{esc(x.get('recommendation') or '—')}</p>
         <div class="small muted" style="margin-top:6px">Effort: {esc(x.get('effort', 'medium'))} · Source: {esc(x.get('source', ''))}</div></div>
     </div>
     {ev_html}
@@ -742,7 +743,7 @@ class Report:
             assist = ""
             if i.get("assistedBy"):
                 assist = (f'<p><b>Assessed via finding</b> {self.finding_link(i["assistedBy"])} – {esc(i.get("assistedSummary") or "")}</p>')
-            q = f'<h5 style="margin-top:10px">Resource Graph query</h5><pre>{esc(i["query"])}</pre>' if i.get("query") else ""
+            q = f'<div class="f-label" style="margin-top:10px">Resource Graph query</div><pre>{esc(i["query"])}</pre>' if i.get("query") else ""
             err = f'<p><b>Query error:</b> {esc(i["error"])}</p>' if i.get("error") else ""
             links = " · ".join(f'<a href="{esc(u)}" target="_blank" rel="noopener">{lbl}</a>'
                                for lbl, u in (("Learn more", safe_url(i.get("link"))),
@@ -781,7 +782,7 @@ class Report:
                            + "; ".join(f"{n:,} manual items of {esc(t)} are in checklists/results.json" for t, n in hidden_manual.items())
                            + ".</p>")
         return f"""
-<h3 style="margin:26px 0 10px">All checklist items</h3>
+<h3 id="items" style="margin:26px 0 10px">All checklist items</h3>
 {hidden_note}
 <p class="print-note" id="itemsPrintNote"></p>
 <div class="filters" data-target="tr.item-row" data-page="150" data-more="itemsMore" data-print-note="itemsPrintNote">
@@ -982,6 +983,31 @@ class Report:
   </div>
 </section>"""
 
+    def print_toc(self) -> str:
+        """Contents page of the PDF. Page numbers come from the first print pass and are only shown in the exported
+        PDF (html.pdf-export), because a reader's own browser may paginate differently."""
+        sections = [("summary", "Executive summary", []), ("scores", "Scores by design area", []),
+                    ("risks", "Top risks", []), ("roadmap", "Remediation roadmap", []),
+                    ("findings", "Findings", [(f"dom-{k}", m["name"]) for k, m in scoring.DOMAINS.items()
+                                              if any(x["domain"] == k for x in self.findings)]),
+                    ("checklists", "Azure review checklists",
+                     [(f"cl-{c['key']}", c.get("title") or c["key"]) for c in (self.cl or {}).get("checklists", [])]
+                     + ([("items", "All checklist items")] if (self.cl or {}).get("checklists") else [])),
+                    ("environment", "Environment", []), ("method", "Method and sources", [])]
+
+        def entry(level: int, anchor: str, title: str, num: str = "") -> str:
+            page = self.toc_pages.get(title)
+            return (f'<li class="l{level}"><a href="#{esc(anchor)}"><span class="n">{esc(num)}</span>'
+                    f'<span class="t">{esc(title)}</span><span class="dots"></span>'
+                    f'<span class="p">{page if page else ""}</span></a></li>')
+
+        items = []
+        for i, (anchor, title, subs) in enumerate(sections, 1):
+            items.append(entry(1, anchor, title, str(i)))
+            items.extend(entry(2, a, t) for a, t in subs)
+        return (f'<section class="print-toc"><div class="label">Azure governance assessment · '
+                f'{esc(self.tenant_name)}</div><h2 class="toc-title">Contents</h2><ol>{"".join(items)}</ol></section>')
+
     def page_css(self) -> str:
         """Running footer for the PDF: CSS page-margin boxes need literal strings, so they are generated here."""
         left = css_str(f"Azure Governance Assessment · {self.tenant_name} · {self.date()}")
@@ -1014,6 +1040,7 @@ class Report:
 </head>
 <body>
 {self.print_cover()}
+{self.print_toc()}
 <header class="topbar"><div class="topbar-inner">
   <div class="mark">{LOGO_SVG}<span>Governance assessment</span></div>
   <h1 class="title">{esc(self.tenant_name)} · {esc(self.date())}</h1>
@@ -1083,8 +1110,8 @@ def _rating_cls(score: Optional[float]) -> str:
     return "fail"
 
 
-def render_run(run_dir: Path, output: Optional[Path] = None) -> Path:
-    rep = Report(run_dir, output.parent if output else None)
+def render_run(run_dir: Path, output: Optional[Path] = None, toc_pages: Optional[Dict[str, int]] = None) -> Path:
+    rep = Report(run_dir, output.parent if output else None, toc_pages)
     page = rep.render()
     if output is None:
         label = util.slug((rep.tenant.get("defaultDomain") or rep.tenant_name).split(".")[0], 30)
@@ -1160,3 +1187,79 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
         util.warn("PDF export failed (browser produced no file)")
         return None
     return pdf_path
+
+
+# ----------------------------------------------------------------------------------------------
+# PDF contents page: two print passes; page numbers are read back from the PDF outline (bookmarks)
+# ----------------------------------------------------------------------------------------------
+def _pdf_string(raw: bytes) -> str:
+    if raw.startswith(b"<"):
+        data = bytes.fromhex(raw[1:-1].decode("ascii"))
+        return data[2:].decode("utf-16-be", "replace") if data[:2] == b"\xfe\xff" else data.decode("latin-1")
+    body, out, i = raw[1:-1], bytearray(), 0
+    escapes = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f", b"(": b"(", b")": b")", b"\\": b"\\"}
+    while i < len(body):
+        c = body[i:i + 1]
+        if c == b"\\" and i + 1 < len(body):
+            nxt = body[i + 1:i + 2]
+            if nxt in escapes:
+                out += escapes[nxt]
+                i += 2
+                continue
+            m = re.match(rb"[0-7]{1,3}", body[i + 1:i + 4])
+            if m:
+                out.append(int(m.group(0), 8) & 0xFF)
+                i += 1 + len(m.group(0))
+                continue
+            i += 1
+            continue
+        out += c
+        i += 1
+    data = bytes(out)
+    return data[2:].decode("utf-16-be", "replace") if data[:2] == b"\xfe\xff" else data.decode("latin-1")
+
+
+def pdf_outline_pages(pdf_path: Path) -> Dict[str, int]:
+    """Bookmark title -> 1-based page number for an uncompressed (Chromium) PDF; {} if it cannot be read."""
+    try:
+        data = pdf_path.read_bytes()
+        objs = {int(m.group(1)): m.group(2) for m in re.finditer(rb"(\d+) 0 obj(.*?)endobj", data, re.S)}
+        root = next(o for o in objs.values() if re.search(rb"/Type\s*/Catalog", o))
+        pages_ref = int(re.search(rb"/Pages\s+(\d+) 0 R", root).group(1))
+        order: List[int] = []
+
+        def walk(num: int) -> None:
+            obj = objs.get(num, b"")
+            kids = re.search(rb"/Kids\s*\[([^\]]*)\]", obj)
+            if re.search(rb"/Type\s*/Pages", obj) and kids:
+                for k in re.findall(rb"(\d+) 0 R", kids.group(1)):
+                    walk(int(k))
+            else:
+                order.append(num)
+        walk(pages_ref)
+        index = {num: i + 1 for i, num in enumerate(order)}
+        out: Dict[str, int] = {}
+        for obj in objs.values():
+            t = re.search(rb"/Title\s*(\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f]*>)", obj, re.S)
+            d = re.search(rb"/Dest\s*\[\s*(\d+) 0 R", obj) or re.search(rb"/D\s*\[\s*(\d+) 0 R", obj)
+            if t and d and int(d.group(1)) in index:
+                out.setdefault(_pdf_string(t.group(1)).strip(), index[int(d.group(1))])
+        return out
+    except Exception as exc:  # the contents page then simply has no page numbers
+        util.debug(f"PDF outline not readable: {exc}")
+        return {}
+
+
+def build_pdf(run_dir: Path, html_path: Path) -> Optional[Path]:
+    """Print the report to PDF; a first pass finds the page of every section for the contents page."""
+    probe = export_pdf(html_path, html_path.with_name(html_path.stem + ".pass1.pdf"))
+    if not probe:
+        return None
+    pages = pdf_outline_pages(probe)
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    if pages:
+        render_run(run_dir, html_path, toc_pages=pages)
+    return export_pdf(html_path)

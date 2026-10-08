@@ -2,6 +2,7 @@
 (function () {
   "use strict";
   var doc = document.documentElement;
+  if (location.hash === "#print") doc.classList.add("pdf-export");  // headless PDF export (azgov-assess report)
 
   // ---------- theme ----------
   var THEME_KEY = "azgov-report-theme";

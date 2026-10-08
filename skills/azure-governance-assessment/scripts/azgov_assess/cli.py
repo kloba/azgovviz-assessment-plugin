@@ -333,7 +333,7 @@ def _stage_report(run: Run, open_browser: bool, output: Optional[str], pdf: bool
     run.set_stage("report", "running", startedAt=util.iso())
     path = report.render_run(run.dir, output=Path(output).expanduser().resolve() if output else None)
     util.ok(f"HTML report: {path}")
-    pdf_path = report.export_pdf(path) if pdf else None
+    pdf_path = report.build_pdf(run.dir, path) if pdf else None
     if pdf_path:
         util.ok(f"PDF report: {pdf_path}")
     elif pdf:

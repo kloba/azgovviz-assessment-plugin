@@ -182,6 +182,32 @@ class SecondReviewTests(unittest.TestCase):
         self.assertEqual(inventory._rename("securityRecommendations", {"recommendation": "x"}), {"title": "x"})
 
 
+class PdfContentsTests(unittest.TestCase):
+    def test_outline_page_numbers(self):
+        import tempfile
+        pdf = (b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >> endobj\n"
+               b"2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n"
+               b"3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n"
+               b"5 0 obj << /Type /Outlines /First 6 0 R >> endobj\n"
+               b"6 0 obj << /Title (Executive summary) /Dest [3 0 R /XYZ 0 0 0] /Next 7 0 R >> endobj\n"
+               b"7 0 obj << /Title <FEFF0049006400650020002600200041> /Dest [4 0 R /XYZ 0 0 0] >> endobj\n"
+               b"8 0 obj << /Title (Scores \\(by area\\)) /Dest [4 0 R /XYZ 0 0 0] >> endobj\n%%EOF")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.pdf"
+            p.write_bytes(pdf)
+            pages = report.pdf_outline_pages(p)
+        self.assertEqual(pages["Executive summary"], 1)
+        self.assertEqual(pages["Ide & A"], 2)
+        self.assertEqual(pages["Scores (by area)"], 2)
+
+    def test_unreadable_pdf_gives_no_numbers(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.pdf"
+            p.write_bytes(b"not a pdf")
+            self.assertEqual(report.pdf_outline_pages(p), {})
+
+
 class TrendTests(unittest.TestCase):
     def test_compare_reports_changes(self):
         def run(score, statuses, generated):
