@@ -179,21 +179,25 @@ def identity_findings(ctx) -> List[Finding]:
         references=[REF_RBAC], source="AzGovViz RoleAssignments", effort="low",
         metric={"subscriptionsOverLimit": too_many}))
 
-    # IAM-005 direct user assignments vs groups
+    # IAM-005 direct user assignments vs groups - among human access only, so that many service-principal
+    # assignments cannot hide that no group is used at all
     scoped = [r for r in uniq.values() if r.get("ScopeTenOrMgOrSubOrRGOrRes") in ("Ten", "Mg", "Sub", "RG")]
     users = [r for r in scoped if (r.get("ObjectType") or "").startswith("User")]
     groups = [r for r in scoped if r.get("ObjectType") == "Group"]
-    share = round(100 * len(users) / len(scoped), 1) if scoped else 0
+    human = len(users) + len(groups)
+    share = round(100 * len(users) / human, 1) if human else 0
     status = "pass" if share <= 25 or len(users) <= 3 else ("warn" if share <= 50 else "fail")
     out.append(Finding(
         "IAM-005", DOMAIN, "Access granted to individual users instead of groups", "medium", status,
-        f"{len(users)} of {len(scoped)} role assignments ({share}%) target individual users; {len(groups)} target groups.",
+        f"{len(users)} of {human} role assignments to people ({share}%) target individual users; "
+        f"{len(groups)} target groups.",
         details="User-by-user assignments do not scale, are hard to review and survive role changes. "
                 "Group-based access aligns permissions with team membership and enables PIM for groups.",
         recommendation="Create Entra ID groups per role and scope (e.g. 'sub-prod-contributors'), assign roles to "
                        "the groups and remove direct user assignments.",
         evidence=evidence(["User", "Role", "Scope"], [[_principal(r), _role(r), _scope_label(r)] for r in users]),
-        references=[REF_RBAC, REF_ALZ_IAM], source="AzGovViz RoleAssignments", effort="medium"))
+        references=[REF_RBAC, REF_ALZ_IAM], source="AzGovViz RoleAssignments", effort="medium",
+        alz=[ALZ["groups_rbac"]]))
 
     # IAM-006 elevated access at root scope '/'
     root_rows = [r for r in uniq.values() if r.get("ScopeTenOrMgOrSubOrRGOrRes") == "Ten"]

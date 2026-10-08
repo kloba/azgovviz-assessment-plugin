@@ -196,7 +196,8 @@ def analyze_run(run_dir: Path, run_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _assist_checklists(findings: List[Dict[str, Any]], checklists: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Use platform findings as evidence for otherwise-manual ALZ checklist items."""
+    """Use platform findings as evidence for ALZ checklist items without an automated verdict
+    (no query, no matching resources, a listing, or an upstream query that Resource Graph rejects)."""
     mapping: Dict[str, Dict[str, Any]] = {}
     status_map = {"pass": "compliant", "fail": "non_compliant", "warn": "partial", "info": "info"}
     for f in findings:
@@ -215,7 +216,7 @@ def _assist_checklists(findings: List[Dict[str, Any]], checklists: Optional[Dict
         changed = False
         for item in cl.get("items", []):
             hit = mapping.get(item.get("guid"))
-            if hit and item.get("status") in ("manual", "no_data", "info"):
+            if hit and item.get("status") in ("manual", "no_data", "info", "error"):
                 item["assistedBy"] = hit["findingId"]
                 item["assistedStatus"] = hit["status"]
                 item["assistedSummary"] = hit.get("summary")

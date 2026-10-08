@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.client
 import json
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -228,12 +229,18 @@ class ResourceGraphClient:
         raise last_error or ArgError("ARM request failed")
 
 
+# "Please provide below info when asking for support: timestamp = ..., correlationId = ...." - noise in a report
+_SUPPORT_NOTE = re.compile(r"Please provide below info when asking for support:.*?correlationId = [0-9a-fA-F-]+\.?\s*", re.S)
+
+
 def _error_details(payload: str) -> tuple:
     try:
         err = json.loads(payload).get("error") or {}
         details = err.get("details") or []
         detail_msg = "; ".join(d.get("message", "") for d in details if isinstance(d, dict) and d.get("message"))
-        message = err.get("message", "") + (f" ({detail_msg})" if detail_msg else "")
+        util.debug(f"Resource Graph error: {err.get('message', '')}")
+        main = _SUPPORT_NOTE.sub("", err.get("message", "")).strip()
+        message = f"{main} ({detail_msg})" if main and detail_msg else (main or detail_msg)
         return err.get("code", "Error"), message.strip()[:1500]
     except (ValueError, AttributeError):
         return "Error", payload[:500]

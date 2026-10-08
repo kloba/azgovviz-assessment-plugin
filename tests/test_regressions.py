@@ -76,6 +76,22 @@ class ChecklistModeTests(unittest.TestCase):
         cl.strip_private(results)
         self.assertNotIn("_verdicts", results["checklists"][0]["items"][0])
 
+    def test_finding_answers_item_whose_query_fails(self):
+        guid = "4b69bad3-3aad-45e8-a68e-1d76667313b4"  # ALZ B03.03, upstream query rejected by Resource Graph
+        item = {"guid": guid, "status": "error", "severity": "Medium", "category": "Identity", "error": "HTTP 400"}
+        checklists = {"checklists": [{"key": "alz", "items": [item]}]}
+        analysis._assist_checklists([{"id": "IAM-005", "status": "fail", "summary": "9 of 11 to users",
+                                      "alz": [guid]}], checklists)
+        self.assertEqual((item["assistedBy"], item["assistedStatus"]), ("IAM-005", "non_compliant"))
+        self.assertEqual(checklists["checklists"][0]["summaryAssisted"]["statusCounts"]["non_compliant"], 1)
+
+    def test_resource_graph_support_boilerplate_is_dropped(self):
+        from azgov_assess.arg import _error_details
+        payload = ('{"error": {"code": "BadRequest", "message": "Please provide below info when asking for support: '
+                   'timestamp = 2026-10-08T21:22:48Z, correlationId = b8294db3-d828-481e-ad4d-52a6016c2ead.", '
+                   '"details": [{"message": "Query is invalid."}]}}')
+        self.assertEqual(_error_details(payload), ("BadRequest", "Query is invalid."))
+
 
 class PolicyStateTests(unittest.TestCase):
     def _ctx(self, inv):

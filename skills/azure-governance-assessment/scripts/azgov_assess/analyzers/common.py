@@ -49,6 +49,7 @@ LEARN = "https://learn.microsoft.com"
 # Azure Landing Zone review checklist GUIDs (Azure/review-checklists, alz_checklist.en.json) that platform
 # findings can answer. Used to mark otherwise-manual ALZ items as "assessed via finding".
 ALZ = {
+    "groups_rbac": "4b69bad3-3aad-45e8-a68e-1d76667313b4",      # B03.03
     "pim": "14658d35-58fd-4772-99b8-21112df27ee4",              # B03.07
     "naming": "cacf55bc-e4e4-46be-96bc-57a5f23a269a",           # C01.01
     "sandbox_mg": "667313b4-f566-44b5-b984-a859c773e7d2",       # C02.02
