@@ -98,6 +98,32 @@ def _parse_timespan(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _retry_after(headers: Any, attempt: int) -> float:
+    """Seconds to wait: ARG quota reset, Retry-After (seconds or HTTP date), else exponential backoff."""
+    headers = headers or {}
+    wait = _parse_timespan(headers.get("x-ms-user-quota-resets-after"))
+    if wait:
+        return wait
+    value = (headers.get("Retry-After") or "").strip()
+    if value:
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            try:
+                from email.utils import parsedate_to_datetime
+                return max(0.0, (parsedate_to_datetime(value) - util.utcnow()).total_seconds())
+            except (TypeError, ValueError):
+                pass
+    return 2 ** attempt + random.random()
+
+
+def _error_body(exc: Any) -> str:
+    try:
+        return exc.read().decode("utf-8", "replace")
+    except Exception:  # the error body itself can fail to arrive (IncompleteRead, reset)
+        return ""
+
+
 class ResourceGraphClient:
     def __init__(self, tokens: TokenProvider, scope: Scope, page_size: int = 1000,
                  max_rows: int = 5000, timeout: float = 120.0):
@@ -127,15 +153,15 @@ class ResourceGraphClient:
                     self._quota.update(resp.headers)
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:  # before OSError: HTTPError is an OSError subclass
-                payload = exc.read().decode("utf-8", "replace")
+                payload = _error_body(exc)
                 self._quota.update(exc.headers)
                 code, message = _error_details(payload)
                 last_error = ArgError(f"HTTP {exc.code} {code}: {message}", exc.code, code)
                 if exc.code == 429 or exc.code >= 500:
-                    retry_after = _parse_timespan(exc.headers.get("x-ms-user-quota-resets-after")) or \
-                        float(exc.headers.get("Retry-After") or 0) or (2 ** attempt + random.random())
-                    util.debug(f"ARG throttled/server error ({exc.code}); retrying in {retry_after:.1f}s")
-                    self._quota.block(retry_after)
+                    if attempt + 1 < attempt_limit:
+                        retry_after = min(_retry_after(exc.headers, attempt), 60)
+                        util.debug(f"ARG throttled/server error ({exc.code}); retrying in {retry_after:.1f}s")
+                        self._quota.block(retry_after)
                     continue
                 if exc.code == 401 and attempt == 0:
                     continue
@@ -143,7 +169,8 @@ class ResourceGraphClient:
             except (OSError, http.client.HTTPException, ValueError) as exc:
                 # URLError, socket.timeout (not a TimeoutError on Python 3.9), resets, truncated/invalid JSON
                 last_error = ArgError(f"network error: {type(exc).__name__}: {exc}")
-                time.sleep(min(2 ** attempt, 20))
+                if attempt + 1 < attempt_limit:
+                    time.sleep(min(2 ** attempt, 20))
         raise last_error or ArgError("ARG request failed")
 
     # -- public ----------------------------------------------------------------------------
@@ -179,17 +206,20 @@ class ResourceGraphClient:
         url = f"{ARM_BASE}{path}{sep}api-version={api_version}"
         last_error: Optional[ArgError] = None
         for attempt in range(attempt_limit):
-            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.tokens.get()}",
+            refresh = attempt > 0 and last_error is not None and last_error.status == 401
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.tokens.get(force_refresh=refresh)}",
                                                        "User-Agent": "azgovviz-assessment-plugin"})
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
-                code, message = _error_details(exc.read().decode("utf-8", "replace"))
+                code, message = _error_details(_error_body(exc))
                 last_error = ArgError(f"HTTP {exc.code} {code}: {message}", exc.code, code)
+                if exc.code == 401 and attempt == 0:
+                    continue  # token expired between calls: refresh once
                 if exc.code != 429 and exc.code < 500:
                     raise last_error
-                delay = float(exc.headers.get("Retry-After") or 0) or (2 ** attempt + random.random())
+                delay = _retry_after(exc.headers, attempt)
             except (OSError, http.client.HTTPException, ValueError) as exc:
                 last_error = ArgError(f"network error: {type(exc).__name__}: {exc}")
                 delay = 2 ** attempt + random.random()

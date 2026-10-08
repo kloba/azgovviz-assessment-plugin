@@ -95,6 +95,9 @@ def analyze_run(run_dir: Path, run_data: Dict[str, Any]) -> Dict[str, Any]:
         azgv = None
     inventory = util.read_json(run_dir / "inventory.json", None)
     checklists = util.read_json(run_dir / "checklists" / "results.json", None)
+    for cl in (checklists or {}).get("checklists", []):  # older runs may carry the export-only verdict lists
+        for item in cl.get("items", []):
+            item.pop("_verdicts", None)
     tenant_id = (run_data.get("tenant") or {}).get("tenantId") or ""
     ctx = Context(run_dir=run_dir, run=run_data, azgv=azgv, inventory=inventory, checklists=checklists,
                   tenant_id=tenant_id)
@@ -166,7 +169,7 @@ def analyze_run(run_dir: Path, run_data: Dict[str, Any]) -> Dict[str, Any]:
                          "stage": (run_data.get("stages") or {}).get("azgovviz"),
                          "html": azgv.html_report().name if azgv and azgv.html_report() else None},
             "inventory": {"available": bool(inventory), "errors": (inventory or {}).get("errors")},
-            "checklists": {"available": bool(checklists),
+            "checklists": {"available": bool((checklists or {}).get("checklists")),
                            "source": (checklists or {}).get("source"),
                            "queries": (checklists or {}).get("queries")},
         },
@@ -279,6 +282,10 @@ def brief_markdown(result: Dict[str, Any], max_findings: int = 60) -> str:
     if t and (t.get("overall") or {}).get("delta") is not None:
         lines.append("")
         lines.append(f"## Trend vs previous assessment ({t.get('baselineGeneratedAt')})")
+        if not t.get("comparable", True):
+            lines.append(f"- CAVEAT: the evidence differs from the baseline ({', '.join(t.get('sourceDiff') or [])}). "
+                         "Score deltas and status changes may come from the different evidence, not from configuration "
+                         "changes - mention them only as indicative and do not report them as regressions.")
         lines.append(f"- Overall: {t['overall']['before']} -> {t['overall']['after']} ({t['overall']['delta']:+})")
         for d in t.get("domains", []):
             if d.get("delta"):
@@ -331,7 +338,16 @@ def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str
     changes.sort(key=lambda c: (c["change"] != "regressed", scoring.SEVERITY_ORDER.get(c["severity"], 9), c["id"]))
     bo = ((baseline.get("scores") or {}).get("overall") or {}).get("score")
     co = ((current.get("scores") or {}).get("overall") or {}).get("score")
+
+    def available(res: Dict[str, Any]) -> Dict[str, bool]:
+        return {k: bool(v.get("available")) for k, v in (res.get("sources") or {}).items() if isinstance(v, dict)}
+    cur_src, base_src = available(current), available(baseline)
+    labels = {"azgovviz": "AzGovViz", "inventory": "Resource Graph inventory", "checklists": "review checklists"}
+    source_diff = [f"{labels.get(k, k)} {'only in this run' if cur_src.get(k) else 'only in the baseline'}"
+                   for k in sorted(set(cur_src) | set(base_src)) if cur_src.get(k) != base_src.get(k)]
     return {
+        "comparable": not source_diff,
+        "sourceDiff": source_diff,
         "baselineGeneratedAt": baseline.get("generatedAt"),
         "baselineRun": baseline_dir,
         "baselineSources": {k: v.get("available") if isinstance(v, dict) else None

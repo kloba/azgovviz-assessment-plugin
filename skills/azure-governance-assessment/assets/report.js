@@ -171,21 +171,26 @@
   }
 
   // ---------- checklist item rows expand ----------
+  // the recommendation text is a <button> (keyboard + screen readers); a click anywhere on the row also toggles
   document.querySelectorAll("tr.item-row").forEach(function (row) {
-    row.setAttribute("tabindex", "0");
-    row.setAttribute("aria-expanded", "false");
-    function toggle() {
+    var btn = row.querySelector(".row-toggle");
+    row.addEventListener("click", function (ev) {
+      if (ev.target.closest("a")) return;
       var d = row.nextElementSibling;
       if (!d || !d.classList.contains("detail-row")) return;
       d.hidden = !d.hidden;
-      row.setAttribute("aria-expanded", d.hidden ? "false" : "true");
-    }
-    row.addEventListener("click", function (ev) { if (ev.target.closest("a")) return; toggle(); });
-    row.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); } });
+      if (btn) btn.setAttribute("aria-expanded", d.hidden ? "false" : "true");
+    });
   });
 
-  // ---------- jump-to-finding links open the target ----------
+  // ---------- jump-to-finding / design-area links reveal what the filters hid ----------
   document.addEventListener("click", function (ev) {
+    var area = ev.target.closest ? ev.target.closest("a[href^='#dom-']") : null;
+    if (area) {
+      var g = document.getElementById(area.getAttribute("href").slice(1));
+      if (g) { g.hidden = false; g.querySelectorAll("details.finding").forEach(function (d) { d.hidden = false; }); }
+      return;
+    }
     var a = ev.target.closest ? ev.target.closest("a[href^='#F-']") : null;
     if (!a) return;
     var el = document.getElementById(a.getAttribute("href").slice(1));

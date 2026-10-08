@@ -200,6 +200,22 @@ def is_tenant(text: Any) -> bool:
     return is_guid(value) or bool(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9-]{1,63})+", value))
 
 
+def tenant_id_for_domain(domain: str, timeout: float = 15) -> Optional[str]:
+    """Tenant GUID for a verified domain from the public OpenID configuration (no sign-in needed)."""
+    import urllib.parse
+    import urllib.request
+    url = (f"https://login.microsoftonline.com/{urllib.parse.quote(domain.strip())}"
+           "/v2.0/.well-known/openid-configuration")
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            issuer = json.loads(resp.read().decode("utf-8")).get("issuer", "")
+    except Exception as exc:  # offline, unknown domain (400), proxy...
+        debug(f"tenant lookup for {domain} failed: {exc}")
+        return None
+    m = re.search(r"/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/", issuer)
+    return m.group(1).lower() if m else None
+
+
 def is_mg_id(text: Any) -> bool:
     """Management group IDs: letters, digits, '-', '_', '.', '(' and ')' - at most 90 characters."""
     return bool(re.fullmatch(r"[A-Za-z0-9._()-]{1,90}", str(text or "").strip()))

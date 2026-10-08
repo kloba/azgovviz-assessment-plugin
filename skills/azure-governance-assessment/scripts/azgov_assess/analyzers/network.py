@@ -21,7 +21,7 @@ SPECIAL_SUBNETS = {"gatewaysubnet", "azurefirewallsubnet", "azurefirewallmanagem
 
 
 MGMT_PORTS = (22, 3389)
-_INTERNET_SOURCES = {"*", "0.0.0.0/0", "internet", "any"}
+_INTERNET_SOURCES = {"*", "0.0.0.0/0", "::/0", "internet", "any"}
 
 
 def _port_specs(value: str) -> List[str]:

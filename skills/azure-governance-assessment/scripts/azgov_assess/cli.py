@@ -11,7 +11,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import TOOL_NAME, __version__, util
 from .arg import ArgError, ResourceGraphClient, Scope
@@ -52,6 +52,8 @@ class Run:
         return self.data.setdefault("stages", {}).setdefault(name, {})
 
     def set_stage(self, name: str, status: str, **extra: Any) -> None:
+        if status == "running":  # a new attempt: drop the previous attempt's results (score, counts, errors)
+            self.data.setdefault("stages", {})[name] = {}
         st = self.stage(name)
         st.update({"status": status, "updatedAt": util.iso(), **extra})
         self.save()
@@ -99,8 +101,14 @@ def _build_scope(args: argparse.Namespace, tenant_id: str, tokens: TokenProvider
     except ArgError as exc:
         if explicit_mg:
             # A typo or missing permission must not silently widen the scope beyond what was asked for.
-            raise SystemExit(f"error: Resource Graph query at management group '{mg}' failed ({exc.status} {exc.code}). "
-                             "Check the ID and that the identity has Reader on it.")
+            if exc.status in (400, 404):
+                why = f"management group '{mg}' was not found ({exc.code}) - check the ID"
+            elif exc.status in (401, 403):
+                why = f"no read access to management group '{mg}' ({exc.code}) - the identity needs Reader on it"
+            else:
+                why = f"Resource Graph query at management group '{mg}' failed: {exc}"
+            raise ArgError(why + "; the scope is not widened beyond the requested management group.",
+                           exc.status, exc.code)
         if exc.status in (400, 401, 403, 404):
             util.warn(f"Resource Graph at management group '{mg}' not permitted ({exc.code}); "
                       "falling back to all subscriptions visible to this identity in the tenant")
@@ -109,7 +117,31 @@ def _build_scope(args: argparse.Namespace, tenant_id: str, tokens: TokenProvider
 
 
 def _split_csv(value: Optional[str]) -> List[str]:
-    return [v.strip() for v in (value or "").split(",") if v.strip()]
+    return list(dict.fromkeys(v.strip() for v in (value or "").split(",") if v.strip()))
+
+
+def _json_obj_arg(value: str) -> Dict[str, Any]:
+    try:
+        data = json.loads(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not valid JSON: {exc}")
+    if not isinstance(data, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object, e.g. '{\"LargeTenant\": true}'")
+    return data
+
+
+def _resolve_tenant(value: str) -> str:
+    """Tenant GUID for a GUID or a tenant domain (AzGovViz, scopes and analyzers need the GUID)."""
+    value = value.strip()
+    if util.is_guid(value):
+        return value.lower()
+    if not util.is_tenant(value):
+        raise SystemExit(f"error: not a tenant ID (GUID) or tenant domain: {value!r}")
+    guid = util.tenant_id_for_domain(value)
+    if not guid:
+        raise SystemExit(f"error: could not resolve the tenant domain {value!r} to a tenant ID - pass the tenant GUID")
+    util.log(f"Tenant {value} = {guid}")
+    return guid
 
 
 def _tenant_arg(value: str) -> str:
@@ -139,12 +171,14 @@ def _mg_arg(value: str) -> str:
 
 def _pick_tenant(args: argparse.Namespace) -> str:
     if args.tenant:
-        return args.tenant.strip()
+        return _resolve_tenant(args.tenant)
     if os.environ.get("AZGOV_TENANT_ID"):
-        return _tenant_arg(os.environ["AZGOV_TENANT_ID"])
+        return _resolve_tenant(os.environ["AZGOV_TENANT_ID"])
     tenants = list_tenants()
     if len(tenants) == 1:
         return next(iter(tenants))
+    if not tenants:
+        raise SystemExit("error: no tenant visible - sign in first (`azgov-assess login --tenant <id>`) or pass --tenant")
     lines = "\n".join(f"  {t['tenantId']}  {t.get('displayName') or ''} ({len(t['subscriptions'])} subscriptions)"
                       for t in tenants.values())
     raise SystemExit("error: --tenant is required when several tenants are visible:\n" + lines)
@@ -157,7 +191,7 @@ def stage_azgovviz(run: Run, args: argparse.Namespace) -> bool:
     from . import azgovviz
     out = run.dir / "azgovviz"
     run.set_stage("azgovviz", "running", startedAt=util.iso())
-    extra = json.loads(args.azgovviz_args) if getattr(args, "azgovviz_args", None) else None
+    extra = getattr(args, "azgovviz_args", None)
     try:
         result = azgovviz.run(
             run.tenant_id, out, management_group=args.management_group, subscriptions=args.subscriptions,
@@ -216,6 +250,11 @@ def stage_inventory_and_checklists(run: Run, args: argparse.Namespace, tokens: T
     evaluator = cl.ChecklistEvaluator(client, source, inventory.load_type_counts(inv), workers=args.workers,
                                       raw_dir=run.dir / "checklists" / "raw")
     results = evaluator.evaluate(keys)
+    if not results["checklists"]:
+        run.set_stage("checklists", "failed", error="none of the requested checklists could be loaded",
+                      checklists=keys)
+        util.err("review-checklists: none of the requested checklists could be loaded (offline? use --checklists-path)")
+        return True  # inventory is still usable
     for c in results["checklists"]:
         util.write_json(run.dir / "checklists" / f"graph_results_{c['key']}.json",
                         cl.official_graph_results(results, c["key"]))
@@ -233,14 +272,27 @@ def stage_inventory_and_checklists(run: Run, args: argparse.Namespace, tokens: T
 
 
 def stage_analysis(run: Run, baseline: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        return _stage_analysis(run, baseline)
+    except BaseException as exc:  # never leave run.json saying "running" (and showing the previous score)
+        run.set_stage("analysis", "failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        raise
+
+
+def _stage_analysis(run: Run, baseline: Optional[str] = None) -> Dict[str, Any]:
     from . import analysis
     run.set_stage("analysis", "running", startedAt=util.iso())
     result = analysis.analyze_run(run.dir, run.data)
     baseline = baseline or run.data.get("baseline")
     if baseline:
         base_findings = util.read_json(Path(baseline).expanduser() / "analysis" / "findings.json", None)
+        base_tenant = ((base_findings or {}).get("tenant") or {}).get("tenantId")
         if base_findings is None:
             util.warn(f"baseline {baseline} has no analysis/findings.json - run `azgov-assess analyze` on it first")
+        elif base_tenant and run.tenant_id and base_tenant.lower() != run.tenant_id.lower():
+            util.warn(f"baseline {baseline} is an assessment of another tenant ({base_tenant}) - trend not computed")
+            run.data.pop("baseline", None)
+            baseline = None
         else:
             result["trend"] = analysis.compare(result, base_findings, str(baseline))
             run.data["baseline"] = str(Path(baseline).expanduser().resolve())
@@ -249,6 +301,9 @@ def stage_analysis(run: Run, baseline: Optional[str] = None) -> Dict[str, Any]:
             delta = t["overall"]["delta"]
             util.ok(f"Trend vs baseline: overall {'n/a' if delta is None else format(delta, '+')} points; "
                     f"{t['improved']} findings improved, {t['regressed']} regressed")
+            if not t.get("comparable", True):
+                util.warn("evidence differs from the baseline (" + "; ".join(t.get("sourceDiff") or []) +
+                          ") - the report marks the trend as indicative")
     assessed_checklists = result.pop("_checklists", None)
     if assessed_checklists:
         util.write_json(run.dir / "analysis" / "checklists.assessed.json", assessed_checklists, indent=None)
@@ -263,23 +318,39 @@ def stage_analysis(run: Run, baseline: Optional[str] = None) -> Dict[str, Any]:
     return result
 
 
-def stage_report(run: Run, open_browser: bool = False, output: Optional[str] = None, pdf: bool = False) -> Path:
+def stage_report(run: Run, open_browser: bool = False, output: Optional[str] = None,
+                 pdf: bool = True) -> Tuple[Path, Optional[Path]]:
+    """Render the HTML report and (by default) print it to PDF - the PDF is the deliverable."""
+    try:
+        return _stage_report(run, open_browser, output, pdf)
+    except BaseException as exc:
+        run.set_stage("report", "failed", error=f"{type(exc).__name__}: {exc}"[:500])
+        raise
+
+
+def _stage_report(run: Run, open_browser: bool, output: Optional[str], pdf: bool) -> Tuple[Path, Optional[Path]]:
     from . import report
     run.set_stage("report", "running", startedAt=util.iso())
-    path = report.render_run(run.dir, output=Path(output) if output else None)
-    if pdf:
-        pdf_path = report.export_pdf(path)
-        if pdf_path:
-            util.ok(f"PDF: {pdf_path}")
+    path = report.render_run(run.dir, output=Path(output).expanduser().resolve() if output else None)
+    util.ok(f"HTML report: {path}")
+    pdf_path = report.export_pdf(path) if pdf else None
+    if pdf_path:
+        util.ok(f"PDF report: {pdf_path}")
+    elif pdf:
+        util.warn("PDF not produced (needs Microsoft Edge, Google Chrome or Chromium); the HTML report prints to PDF "
+                  "from any browser (Print > Save as PDF).")
+
+    def rel(p: Path) -> str:
+        return str(p.relative_to(run.dir)) if p.is_relative_to(run.dir) else str(p)
+
     insights = (run.dir / "analysis" / "ai-insights.json").exists()
-    run.set_stage("report", "ok", path=str(path.relative_to(run.dir)) if path.is_relative_to(run.dir) else str(path),
+    run.set_stage("report", "ok", path=rel(path), pdf=rel(pdf_path) if pdf_path else None,
                   aiInsights=insights, bytes=path.stat().st_size)
     run.data["finishedAt"] = util.iso()
     run.save()
-    util.ok(f"Report: {path}")
     if open_browser:
-        webbrowser.open(path.as_uri())
-    return path
+        webbrowser.open((pdf_path or path).as_uri())
+    return path, pdf_path
 
 
 # ----------------------------------------------------------------------------------------------
@@ -309,16 +380,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         util.err(tokens.login_hint())
         return 2
     result = stage_analysis(run, args.baseline)
-    path = stage_report(run, open_browser=args.open)
-    _print_summary(run, result, path, time.time() - started)
+    path, pdf_path = stage_report(run, open_browser=args.open, pdf=args.pdf)
+    _print_summary(run, result, path, pdf_path, time.time() - started)
     return 0
 
 
-def _print_summary(run: Run, result: Dict[str, Any], path: Path, seconds: float) -> None:
+def _print_summary(run: Run, result: Dict[str, Any], path: Path, pdf_path: Optional[Path], seconds: float) -> None:
     ov = result["scores"]["overall"]
     print(json.dumps({
         "runDir": str(run.dir),
         "report": str(path),
+        "pdf": str(pdf_path) if pdf_path else None,
         "findings": str(run.dir / "analysis" / "findings.json"),
         "brief": str(run.dir / "analysis" / "brief.md"),
         "overallScore": ov["score"],
@@ -346,18 +418,31 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _analysis_stale(run: Run) -> bool:
+    """findings.json is missing or older than the evidence (e.g. after `checklists --run-dir`)."""
+    findings = run.dir / "analysis" / "findings.json"
+    if not findings.exists():
+        return True
+    built = findings.stat().st_mtime
+    inputs = [run.dir / "inventory.json", run.dir / "checklists" / "results.json", *(run.dir / "azgovviz").glob("*.csv")]
+    return any(p.exists() and p.stat().st_mtime > built for p in inputs)
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     run = Run(_resolve_run_dir(args.run_dir))
-    if args.reanalyze or args.baseline or not (run.dir / "analysis" / "findings.json").exists():
+    if args.reanalyze or args.baseline or _analysis_stale(run):
         stage_analysis(run, args.baseline)
     if (run.dir / "analysis" / "ai-insights.json").exists():
         from . import insights
-        problems = insights.validate(util.read_json(run.dir / "analysis" / "ai-insights.json", {}),
-                                     util.read_json(run.dir / "analysis" / "findings.json", {}))
+        data, problems = insights.load(run.dir / "analysis" / "ai-insights.json")
+        if data is not None:
+            problems = insights.validate(data, util.read_json(run.dir / "analysis" / "findings.json", {}))
         for p in problems:
             util.warn(f"ai-insights.json: {p}")
-    path = stage_report(run, open_browser=args.open, output=args.output, pdf=args.pdf)
+    path, pdf_path = stage_report(run, open_browser=args.open, output=args.output, pdf=args.pdf)
     print(str(path))
+    if pdf_path:
+        print(str(pdf_path))
     return 0
 
 
@@ -378,11 +463,12 @@ def cmd_insights_template(args: argparse.Namespace) -> int:
 def cmd_validate_insights(args: argparse.Namespace) -> int:
     from . import insights
     run = Run(_resolve_run_dir(args.run_dir))
-    data = util.read_json(run.dir / "analysis" / "ai-insights.json", None)
-    if data is None:
+    data, problems = insights.load(run.dir / "analysis" / "ai-insights.json")
+    if data is None and not problems:
         util.err("analysis/ai-insights.json not found")
         return 1
-    problems = insights.validate(data, util.read_json(run.dir / "analysis" / "findings.json", {}))
+    if data is not None:
+        problems = insights.validate(data, util.read_json(run.dir / "analysis" / "findings.json", {}))
     if problems:
         for p in problems:
             util.err(p)
@@ -395,7 +481,7 @@ def _open_or_create(args: argparse.Namespace) -> Run:
     if args.run_dir:
         return Run(_resolve_run_dir(args.run_dir))
     tenant_id = _pick_tenant(args)
-    root = Path(args.output_dir or "azgov-assessments").expanduser().resolve()
+    root = Path(args.output_dir or os.environ.get("AZGOV_OUTPUT_DIR", "azgov-assessments")).expanduser().resolve()
     return Run.create(root, {"tenantId": tenant_id}, {k: v for k, v in vars(args).items() if not callable(v)})
 
 
@@ -422,11 +508,13 @@ def cmd_login(args: argparse.Namespace) -> int:
     if not pwsh:
         util.err("pwsh not found; install PowerShell 7 (https://aka.ms/powershell)")
         return 3
-    script = ("$WarningPreference='SilentlyContinue'; Update-AzConfig -LoginExperienceV2 Off -Scope Process | Out-Null; "
+    script = ("$ErrorActionPreference='Stop'; $WarningPreference='SilentlyContinue'; "
+              "Update-AzConfig -LoginExperienceV2 Off -Scope Process | Out-Null; "
               "$p = @{ Tenant = $env:AZGOV_PS_TENANT }; "
               "if ($env:AZGOV_PS_SUBSCRIPTION) { $p.Subscription = $env:AZGOV_PS_SUBSCRIPTION }; "
               "if ($env:AZGOV_PS_DEVICECODE) { $p.UseDeviceAuthentication = $true }; "
-              "$c = Connect-AzAccount @p; \"Signed in: $($c.Context.Account.Id) tenant=$($c.Context.Tenant.Id)\"")
+              "$c = Connect-AzAccount @p; if (-not $c.Context.Account) { throw 'Sign-in did not complete.' }; "
+              "\"Signed in: $($c.Context.Account.Id) tenant=$($c.Context.Tenant.Id)\"")
     env = pwsh_env(tenant=args.tenant, subscription=args.subscription, devicecode="1" if args.device_code else "")
     return subprocess.call([pwsh, "-NoLogo", "-NoProfile", "-Command", script], env=env)
 
@@ -459,6 +547,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         add("github", False, f"cannot reach GitHub ({exc}); use --checklists-path / --azgovviz-path offline copies")
     if args.tenant:
+        args.tenant = _resolve_tenant(args.tenant)
         tokens = TokenProvider(args.tenant, args.auth)
         try:
             tokens.get()
@@ -532,7 +621,7 @@ def _add_azgovviz_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--scrub-pii", action="store_true", help="Do not show user names/UPNs in role assignments")
     g.add_argument("--azgovviz-ref", default="master", help="Git branch/tag of Azure/Azure-Governance-Visualizer")
     g.add_argument("--azgovviz-path", help="Use an existing local AzGovViz clone")
-    g.add_argument("--azgovviz-args", help="JSON object with extra AzGovVizParallel.ps1 parameters")
+    g.add_argument("--azgovviz-args", type=_json_obj_arg, help="JSON object with extra AzGovVizParallel.ps1 parameters")
     g.add_argument("--throttle", type=int, default=10, help="AzGovViz ThrottleLimit (parallelism)")
 
 
@@ -562,7 +651,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_checklist_args(p)
     p.add_argument("--skip-azgovviz", action="store_true", help="Resource Graph only (no PowerShell needed)")
     p.add_argument("--no-tenant-lookup", dest="tenant_lookup", action="store_false", help=argparse.SUPPRESS)
-    p.add_argument("--open", action="store_true", help="Open the HTML report when done")
+    p.add_argument("--open", action="store_true", help="Open the PDF (or HTML) report when done")
+    p.add_argument("--no-pdf", dest="pdf", action="store_false", help="Skip the PDF export (HTML report only)")
     p.add_argument("--baseline", help="Previous run folder to compare against (trend section)")
     p.set_defaults(func=cmd_run)
 
@@ -588,7 +678,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", help="Explicit output HTML path")
     p.add_argument("--reanalyze", action="store_true", help="Re-run the analysis stage first")
     p.add_argument("--baseline", help="Previous run folder to compare against (implies --reanalyze)")
-    p.add_argument("--pdf", action="store_true", help="Also print the report to PDF (headless Edge/Chrome)")
+    p.add_argument("--no-pdf", dest="pdf", action="store_false",
+                   help="Skip the PDF (by default the report is also printed to PDF with headless Edge/Chrome)")
+    p.add_argument("--pdf", dest="pdf", action="store_true", help=argparse.SUPPRESS)  # default; kept for old scripts
     p.add_argument("--open", action="store_true")
     p.set_defaults(func=cmd_report)
 

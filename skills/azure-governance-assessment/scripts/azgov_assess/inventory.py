@@ -45,9 +45,9 @@ QUERIES: Dict[str, str] = {
     "securityRecommendations": (
         "securityresources | where type =~ 'microsoft.security/assessments' "
         "| extend status=tostring(properties.status.code), severity=tostring(properties.metadata.severity), "
-        "title=tostring(properties.displayName) "
+        "recommendation=tostring(properties.displayName) "
         "| where status =~ 'Unhealthy' "
-        "| summarize resources=count() by title, severity | order by resources desc"),
+        "| summarize resources=count() by recommendation, severity | order by resources desc"),
     "advisor": (
         "advisorresources | where type =~ 'microsoft.advisor/recommendations' "
         "| extend category=tostring(properties.category), impact=tostring(properties.impact), "
@@ -97,12 +97,12 @@ QUERIES: Dict[str, str] = {
     # every inbound Allow rule from the internet; port ranges ("3389-3390", "0-65535") are matched in the analyzer
     "nsgOpenInbound": (
         "resources | where type =~ 'microsoft.network/networksecuritygroups' "
-        "| mv-expand rule = properties.securityRules "
+        "| mv-expand rule = properties.securityRules limit 1000 "
         "| extend access=tostring(rule.properties.access), direction=tostring(rule.properties.direction), "
         "src=tostring(rule.properties.sourceAddressPrefix), srcs=tostring(rule.properties.sourceAddressPrefixes), "
         "port=tostring(rule.properties.destinationPortRange), ports=tostring(rule.properties.destinationPortRanges) "
         "| where access =~ 'Allow' and direction =~ 'Inbound' "
-        "| where src in~ ('*', '0.0.0.0/0', 'Internet', 'Any') or (isnotempty(srcs) and srcs != '[]') "
+        "| where src in~ ('*', '0.0.0.0/0', '::/0', 'Internet', 'Any') or (isnotempty(srcs) and srcs != '[]') "
         "| where port in ('*', '22', '3389') or port contains '-' or ports contains '22' or ports contains '3389' "
         "or ports contains '-' or ports contains '*' "
         "| project id, nsg=name, subscriptionId, rule=tostring(rule.name), port=iff(isempty(port), ports, port), "
@@ -118,6 +118,15 @@ QUERIES: Dict[str, str] = {
         "| extend src=tolower(tostring(properties.sourceResourceId)) | summarize by src"),
 }
 
+# result columns renamed after the query (KQL keywords such as `title` cannot be projected safely)
+RENAMES = {"securityRecommendations": {"recommendation": "title"}}
+
+
+def _rename(name: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    mapping = RENAMES.get(name)
+    return {mapping.get(k, k): v for k, v in row.items()} if mapping else row
+
+
 ARM_PROBES = {
     "hierarchySettings": "/providers/Microsoft.Management/managementGroups/{root}/settings/default",
 }
@@ -132,7 +141,7 @@ def collect(client: ResourceGraphClient, tenant_id: Optional[str], subscription_
     def probe(name: str, kql: str) -> None:
         try:
             res = client.query(kql, max_rows=10000)
-            data[name] = res.rows
+            data[name] = [_rename(name, r) for r in res.rows]
             if res.truncated:
                 data.setdefault("truncated", []).append(name)
         except Exception as exc:  # one failed probe must not abort the inventory

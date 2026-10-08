@@ -518,7 +518,7 @@ def official_graph_results(results: Dict[str, Any], key: str) -> Dict[str, Any]:
                 if compliant is None:
                     continue
                 checks.append({"guid": item["guid"], "compliant": "true" if compliant else "false", "id": rid})
-    return {"metadata": {"format": "list", "timestamp": results.get("generatedAt")}, "checks": checks}
+    return {"metadata": {"format": "json", "timestamp": results.get("generatedAt")}, "checks": checks}
 
 
 def strip_private(results: Dict[str, Any]) -> Dict[str, Any]:

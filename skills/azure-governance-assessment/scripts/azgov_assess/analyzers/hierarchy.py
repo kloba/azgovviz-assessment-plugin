@@ -78,7 +78,8 @@ def organization_findings(ctx) -> List[Finding]:
         out.append(Finding(
             "ORG-002", DOMAIN, "Management group hierarchy beneath the root", "medium",
             "pass" if child_mgs and has_intermediate else ("warn" if child_mgs else "fail"),
-            f"{len(mgs)} management groups (including the top of the scope); {len(child_mgs)} directly under {root_label}."
+            f"{len(mgs)} management groups (including {'the Tenant Root Group' if is_tenant_root else 'the top of the scope'}); "
+            f"{len(child_mgs)} directly under {root_label}."
             if child_mgs else f"Only {root_label} exists - no management group hierarchy below it.",
             details="A management group hierarchy is the backbone for scaling policy and RBAC. ALZ uses an intermediate "
                     "root (e.g. 'contoso') so that tenant-wide settings stay separate from your governance.",
@@ -110,6 +111,14 @@ def organization_findings(ctx) -> List[Finding]:
             details="A sandbox lets teams experiment under relaxed policy without touching production landing zones.",
             recommendation="Create a 'Sandbox' management group with its own (looser) policy set and budgets.",
             references=[REF_MG], source="AzGovViz hierarchy", effort="low", alz=[ALZ["sandbox_mg"]]))
+
+        if not is_tenant_root:
+            # a subtree cannot show the tenant's platform / landing-zone / sandbox layout: report, do not score,
+            # and do not answer the ALZ checklist items with it
+            for f in out:
+                if f.id in ("ORG-002", "ORG-003", "ORG-004"):
+                    f.status, f.alz = "info", []
+                    f.summary = f"Scoped run (top: {root_label}) - not scored: {f.summary}"
 
         # ORG-005 depth
         # absolute level (AzGovViz `level` / ARG ancestor chain) so scoped runs measure from the real root

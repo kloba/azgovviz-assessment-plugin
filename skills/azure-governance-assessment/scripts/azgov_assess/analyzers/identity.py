@@ -97,7 +97,7 @@ def identity_findings(ctx) -> List[Finding]:
         "critical" if any(r.get("ScopeTenOrMgOrSubOrRGOrRes") in ("Ten", "Mg") and _role(r).lower() in PRIVILEGED_ROLE_NAMES
                           for r in guest_rows) else "high",
         "fail" if guests_priv else ("warn" if guest_ev else "pass"),
-        (f"{len({e[0] for e in guest_ev})} guest identities hold Owner/Contributor/User Access Administrator "
+        (f"{len({r.get('ObjectId') for r in guest_rows})} guest identities hold Owner/Contributor/User Access Administrator "
          f"({len(guests_priv)} with Owner-level rights)." if guest_ev else
          "No guest (B2B) identities hold Owner, Contributor or User Access Administrator."),
         details="External identities are governed by another organisation's lifecycle and security controls. "

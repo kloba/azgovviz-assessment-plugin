@@ -35,7 +35,7 @@ class InputValidationTests(unittest.TestCase):
             cli._tenant_arg("x' + (Write-Output 'INJECTED') + '")
         with self.assertRaises(argparse.ArgumentTypeError):
             cli._guid_list_arg(f"{SUB},abc")
-        self.assertEqual(cli._guid_list_arg(f"{SUB}, {SUB}"), [SUB, SUB])
+        self.assertEqual(cli._guid_list_arg(f"{SUB}, {SUB}"), [SUB])  # duplicates collapse
 
     def test_token_script_takes_values_from_environment(self):
         from azgov_assess import auth
@@ -139,6 +139,47 @@ class ScoringConsistencyTests(unittest.TestCase):
             [{"domain": "identity", "status": "pass", "severity": "high"}], None)["domains"]
         identity = next(d for d in domains if d["key"] == "identity")
         self.assertEqual(identity["rating"], scoring.level_for(identity["score"]))
+
+
+class SecondReviewTests(unittest.TestCase):
+    def test_invalid_insights_json_is_a_problem_not_a_crash(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "ai-insights.json"
+            p.write_text('{"schema": "x",}', encoding="utf-8")
+            data, problems = insights.load(p)
+            self.assertIsNone(data)
+            self.assertTrue(problems and "not valid JSON" in problems[0])
+        bad = {"schema": insights.SCHEMA, "executiveSummary": "x" * 100, "keyRisks": [
+            {"title": "t", "why": "w", "recommendation": "r", "severity": "high", "domain": ["identity"]}]}
+        self.assertTrue(any("domain" in p for p in insights.validate(bad, {"findings": []})))
+        self.assertIsNone(insights.sanitize(bad)["keyRisks"][0]["domain"])
+
+    def test_trend_flags_different_evidence(self):
+        def run(sources):
+            return {"sources": {k: {"available": v} for k, v in sources.items()},
+                    "scores": {"overall": {"score": 50.0}, "domains": []}, "findings": []}
+        t = analysis.compare(run({"azgovviz": True, "inventory": True}), run({"azgovviz": True, "inventory": False}))
+        self.assertFalse(t["comparable"])
+        self.assertEqual(t["sourceDiff"], ["Resource Graph inventory only in this run"])
+        self.assertTrue(analysis.compare(run({"azgovviz": True}), run({"azgovviz": True}))["comparable"])
+
+    def test_key_vault_exposure_without_storage_accounts(self):
+        from azgov_assess.analyzers import security
+        inv = {"keyVaults": [{"name": "kv1", "publicNetworkAccess": "Enabled", "defaultAction": "Allow"},
+                             {"name": "kv2", "publicNetworkAccess": "Enabled", "defaultAction": "Deny"}]}
+        ctx = Context(run_dir=Path("/tmp"), run={}, azgv=None, inventory=inv, checklists=None, tenant_id=TENANT)
+        sec010 = [f for f in security.security_findings(ctx) if f.id == "SEC-010"]
+        self.assertEqual(len(sec010), 1)
+        self.assertIn("1 of 2 key vaults", sec010[0].summary)
+
+    def test_ipv6_any_is_internet(self):
+        self.assertTrue(network.from_internet("::/0"))
+
+    def test_security_recommendation_title_renamed(self):
+        from azgov_assess import inventory
+        self.assertNotIn(" title", inventory.QUERIES["securityRecommendations"])
+        self.assertEqual(inventory._rename("securityRecommendations", {"recommendation": "x"}), {"title": "x"})
 
 
 class TrendTests(unittest.TestCase):

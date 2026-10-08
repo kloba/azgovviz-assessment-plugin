@@ -69,9 +69,12 @@ def run(tenant_id: str, out_dir: Path, management_group: Optional[str] = None,
     env = dict(os.environ, NO_COLOR="1")
     lines = 0
     with open(log_path, "w", encoding="utf-8", errors="replace") as log_fh:
+        # own process group, so a timeout or Ctrl+C also stops children that hold stdout (e.g. git clone)
+        group = {"start_new_session": True} if os.name == "posix" else \
+            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", env=env, bufsize=1,
-                                stdin=None if (login or device_code) else subprocess.DEVNULL)
+                                stdin=None if (login or device_code) else subprocess.DEVNULL, **group)
         last_echo = [time.time()]
         stop = threading.Event()
         timed_out = threading.Event()
@@ -81,7 +84,7 @@ def run(tenant_id: str, out_dir: Path, management_group: Optional[str] = None,
             while not stop.wait(15):
                 if time.time() - started > timeout_minutes * 60:
                     timed_out.set()
-                    proc.kill()
+                    _kill_tree(proc)
                     return
                 if time.time() - last_echo[0] >= 55:
                     util.log(f"AzGovViz still running... {util.human_duration(time.time() - started)} elapsed, "
@@ -103,6 +106,8 @@ def run(tenant_id: str, out_dir: Path, management_group: Optional[str] = None,
             proc.wait()
         finally:
             stop.set()
+            if proc.poll() is None:  # interrupted (Ctrl+C) or failed while reading output
+                _kill_tree(proc)
     if timed_out.is_set():
         raise AzGovVizError(f"AzGovViz exceeded the {timeout_minutes} minute timeout and was stopped. "
                             f"Last lines:\n{_tail(log_path, 15)}")
@@ -127,6 +132,22 @@ def run(tenant_id: str, out_dir: Path, management_group: Optional[str] = None,
         util.warn(f"AzGovViz exited with code {proc.returncode}, but outputs exist - continuing")
     util.ok(f"AzGovViz finished in {util.human_duration(duration)} ({result['csvCount']} CSV files)")
     return result
+
+
+def _kill_tree(proc: "subprocess.Popen[str]") -> None:
+    """Stop pwsh and everything it started."""
+    try:
+        if os.name == "posix":
+            import signal
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+    except (ProcessLookupError, PermissionError, OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 def _strip_ansi(text: str) -> str:

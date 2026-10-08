@@ -13,7 +13,8 @@ This skill turns a tenant into an evidence-based governance assessment:
 3. **Azure/review-checklists** items (ALZ, WAF, APRL by default) are evaluated with their own Resource Graph queries.
 4. A deterministic engine produces ~50 scored findings across nine design areas and a maturity level.
 5. **You (Copilot)** read the brief and write the AI analysis (executive summary, key risks, roadmap).
-6. The engine renders one self-contained HTML report (works offline, prints to PDF).
+6. The engine renders the deliverable: a **PDF report** (cover page, numbered sections, page numbers - printed
+   with headless Edge/Chrome) plus the same report as one self-contained, interactive HTML file.
 
 Everything is driven by one launcher in this skill's folder: `scripts/azgov-assess` (on Windows:
 `pwsh scripts/azgov-assess.ps1`). Paths below are relative to this skill's directory - resolve them to
@@ -108,8 +109,11 @@ Fix every validation error before rendering (unknown finding IDs, TODO text, wro
 ### Step 5 - Present the result
 
 Reply with: overall score and maturity level, the three to five most important risks (one line each, with
-finding IDs), quick wins, and the absolute path of the HTML report. Offer to open it
-(`open <file>` on macOS, `start <file>` on Windows, `xdg-open <file>` on Linux) and to drill into any area.
+finding IDs), quick wins, and the absolute path of the **PDF report** (the `report` command prints the HTML path
+and then the PDF path; the PDF is the deliverable, the HTML is the interactive version with filters). Offer to open
+it (`open <file>` on macOS, `start <file>` on Windows, `xdg-open <file>` on Linux) and to drill into any area.
+If no PDF was produced (no Edge/Chrome/Chromium on the machine), say so and point to the HTML report, which
+prints to PDF from any browser.
 
 ## Re-running pieces
 
@@ -119,7 +123,7 @@ finding IDs), quick wins, and the absolute path of the HTML report. Offer to ope
 | Re-evaluate checklists into an existing run | `scripts/azgov-assess checklists --run-dir <run> --tenant <id> -c alz,waf,aprl,aks` |
 | Re-analyse after changing data | `scripts/azgov-assess analyze --run-dir <run>` |
 | Re-render report (e.g. after editing ai-insights.json) | `scripts/azgov-assess report --run-dir <run>` |
-| Also produce a PDF (headless Edge/Chrome) | `scripts/azgov-assess report --run-dir <run> --pdf` |
+| HTML only, skip the PDF | `scripts/azgov-assess report --run-dir <run> --no-pdf` |
 | Compare with an earlier assessment of the same tenant | `scripts/azgov-assess report --run-dir <run> --baseline <older run>` (or `run ... --baseline <older run>`) |
 | Use an offline AzGovViz / checklist clone | `--azgovviz-path <dir>` / `--checklists-path <dir>` |
 
@@ -146,5 +150,5 @@ azgov-assessments/<tenant>_<timestamp>/
   analysis/checklists.assessed.json  checklist items with design area and tenant-evidence assists
   analysis/brief.md              compact brief for the AI step
   analysis/ai-insights.json      written by you in Step 4
-  report/Azure-Governance-Assessment_<tenant>_<date>.html
+  report/Azure-Governance-Assessment_<tenant>_<date>.pdf   the deliverable (plus the .html version)
 ```

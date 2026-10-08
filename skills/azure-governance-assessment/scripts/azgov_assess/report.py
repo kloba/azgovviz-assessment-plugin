@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -12,6 +13,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from . import TOOL_NAME, __version__, scoring, util
 
 ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+PRINT_EVIDENCE_ROWS = 10  # keep in sync with report-print.css (tr:nth-child(n+11))
+LOGO_SVG = ('<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18" stroke="currentColor" stroke-width="2"/>'
+            '<path d="M5 20V15h3v5M10.5 20V11h3v9M16 20V7h3v13" fill="none" stroke="currentColor" stroke-width="1.8"/>'
+            '<path d="M4 9.5 L19 3.5" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2 2.2"/></svg>')
 
 SEV_LABEL = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low", "info": "Info"}
 STATUS_LABEL = {"fail": "Fail", "warn": "Warning", "pass": "Pass", "info": "Info", "not_assessed": "Not assessed"}
@@ -30,6 +35,12 @@ CL_LABEL = {k: v for k, v, _ in CL_STATUS}
 
 def esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
+
+
+def css_str(value: Any) -> str:
+    """A quoted CSS string literal (for generated `content:` values)."""
+    text = re.sub(r"[\x00-\x1f]", " ", "" if value is None else str(value))
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("<", "\\3c ") + '"'
 
 
 def safe_url(value: Any) -> Optional[str]:
@@ -162,7 +173,7 @@ def stacked(counts: Dict[str, int], statuses: List[Tuple[str, str, str]] = CL_ST
             continue
         pct = 100 * n / total
         text = f'<span>{n}</span>' if show_labels and pct >= 7 else ""
-        dark = key in ("compliant", "non_compliant", "info")
+        dark = key == "non_compliant"  # white text only where it reaches 4.5:1 (green/grey segments use ink)
         segs.append(f'<div class="seg-{esc(key)}{" on-dark" if dark else ""}" style="flex:{n} 1 0;background:{color}" '
                     f'data-tip="{esc(label)}|{n:,} {total_label} ({pct:.0f}%)">{text}</div>')
     return f'<div class="{cls}" role="img" aria-label="{esc(_stack_aria(counts, statuses))}">{"".join(segs)}</div>'
@@ -235,7 +246,9 @@ def glide_path(score: Optional[float]) -> str:
     return "".join(parts)
 
 
-def data_table(columns: List[str], rows: List[List[Any]], numeric: Iterable[int] = (), cls: str = "data") -> str:
+def data_table(columns: List[str], rows: List[List[Any]], numeric: Iterable[int] = (), cls: str = "data",
+               label: Optional[str] = None) -> str:
+    """A data table; wide tables (`label` or > 6 columns) scroll sideways, so their wrapper is a focusable region."""
     nums = set(numeric)
     head = "".join(f'<th{" class=num" if i in nums else ""}>{esc(c)}</th>' for i, c in enumerate(columns))
     body = []
@@ -247,14 +260,19 @@ def data_table(columns: List[str], rows: List[List[Any]], numeric: Iterable[int]
                 cell = f'<span class="mono">{cell}</span>'
             cells.append(f'<td{" class=num" if i in nums else ""}>{cell}</td>')
         body.append("<tr>" + "".join(cells) + "</tr>")
-    return f'<div class="tbl-wrap"><table class="{cls}"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
+    region = (f' role="region" tabindex="0" aria-label="{esc(label or columns[0] + " table")}"'
+              if label or len(columns) > 6 else "")
+    return (f'<div class="tbl-wrap"{region}><table class="{cls}"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
 # ----------------------------------------------------------------------------------------------
 # Sections
 # ----------------------------------------------------------------------------------------------
 class Report:
-    def __init__(self, run_dir: Path):
+    def __init__(self, run_dir: Path, out_dir: Optional[Path] = None):
+        # links to the run's JSON/CSV files are relative to where the HTML is written (default: <run>/report/)
+        self.base = Path(os.path.relpath(run_dir, out_dir or run_dir / "report")).as_posix()
         self.dir = run_dir
         self.run = util.read_json(run_dir / "run.json", {}) or {}
         self.f = util.read_json(run_dir / "analysis" / "findings.json", None)
@@ -263,13 +281,11 @@ class Report:
         self.cl = util.read_json(run_dir / "analysis" / "checklists.assessed.json", None) or \
             util.read_json(run_dir / "checklists" / "results.json", None)
         self.inv = util.read_json(run_dir / "inventory.json", None) or {}
-        self.ai = util.read_json(run_dir / "analysis" / "ai-insights.json", None)
+        from .insights import load, sanitize, validate
+        self.ai, self.ai_problems = load(run_dir / "analysis" / "ai-insights.json")
         if self.ai is not None:
-            from .insights import sanitize, validate
             self.ai_problems = validate(self.ai, self.f)
             self.ai = sanitize(self.ai)  # the report renders even when the file has problems
-        else:
-            self.ai_problems = []
         self.tenant = self.f.get("tenant") or self.run.get("tenant") or {}
         self.facts = self.f.get("facts") or {}
         self.findings = self.f.get("findings") or []
@@ -358,14 +374,20 @@ class Report:
         if ov.get("delta") is None:
             return ""
         when = util.parse_iso(t.get("baselineGeneratedAt"))
+        since = f' ({esc(when.strftime("%d %b %Y"))})' if when else ""
+        if not t.get("comparable", True):
+            return (f'<div class="trend small"><span class="delta">≈ not comparable</span> with the previous assessment'
+                    f'{since}: the evidence differs ({esc("; ".join(t.get("sourceDiff") or []))}), so '
+                    f'{fmt_score(ov.get("before"))} → {fmt_score(ov.get("after"))} is indicative only.</div>')
         d = ov["delta"]
         arrow = "▲" if d > 0 else ("▼" if d < 0 else "■")
         return (f'<div class="trend small"><span class="delta {"up" if d > 0 else ("down" if d < 0 else "")}">'
-                f'{arrow} {d:+.1f}</span> vs previous assessment'
-                f'{" (" + esc(when.strftime("%d %b %Y")) + ")" if when else ""}: {fmt_score(ov.get("before"))} → '
+                f'{arrow} {d:+.1f}</span> vs previous assessment{since}: {fmt_score(ov.get("before"))} → '
                 f'{fmt_score(ov.get("after"))} · {t.get("improved", 0)} improved, {t.get("regressed", 0)} regressed</div>')
 
     def domain_delta(self, key: str) -> str:
+        if not self.trend.get("comparable", True):
+            return ""
         for d in self.trend.get("domains", []):
             if d["key"] == key and d.get("delta"):
                 cls = "up" if d["delta"] > 0 else "down"
@@ -387,7 +409,11 @@ class Report:
         return (f'<div class="card pad" style="margin-top:16px"><h3>Changes since the previous assessment'
                 f'{" (" + esc(when.strftime("%d %b %Y")) + ")" if when else ""}</h3>'
                 f'<p class="small ink2" style="margin:4px 0 10px">Findings whose status changed between the two runs. '
-                f'Baseline: <code>{esc(Path(t.get("baselineRun") or "").name)}</code>.</p>'
+                f'Baseline: <code>{esc(Path(t.get("baselineRun") or "").name)}</code>.'
+                + ('' if t.get("comparable", True) else
+                   f' <b>The evidence differs from the baseline ({esc("; ".join(t.get("sourceDiff") or []))})</b>: a '
+                   'change can come from the additional evidence rather than from a configuration change.')
+                + '</p>'
                 f'<div class="tbl-wrap"><table class="data"><thead><tr><th>Change</th><th>Finding</th><th>Status</th>'
                 f'<th>Now</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>')
 
@@ -446,6 +472,7 @@ class Report:
     # -- scorecard --
     def scorecard(self) -> str:
         rows = []
+        with_findings = {x["domain"] for x in self.findings}  # only those areas have a findings group to link to
         for d in self.scores.get("domains", []):
             c = d["checks"]
             split = (f"{c['fail']} fail · {c['warn']} warn · {c['pass']} pass"
@@ -456,7 +483,7 @@ class Report:
             rating = d.get("rating") or {}
             rows.append(f"""
 <tr>
-  <td><div class="dname"><a href="#dom-{esc(d['key'])}">{esc(d['name'])}</a></div><div class="dblurb">{esc(d['blurb'])}</div>{comment}</td>
+  <td><div class="dname">{f'<a href="#dom-{esc(d["key"])}">{esc(d["name"])}</a>' if d["key"] in with_findings else esc(d["name"])}</div><div class="dblurb">{esc(d['blurb'])}</div>{comment}</td>
   <td style="width:34%">{meter(d.get('score'), d['name'])}{self.domain_delta(d['key'])}</td>
   <td class="nowrap">{chip(_rating_cls(d.get('score')), rating.get('name', 'Not assessed'))}</td>
   <td class="split">{split}</td>
@@ -482,7 +509,7 @@ class Report:
                 dom = scoring.DOMAINS.get(r.get("domain") or "", {}).get("name", "")
                 cards.append(f"""
 <div class="card risk {esc(sev)}">{sev_chip(sev)} <span class="label" style="margin-left:6px">{esc(dom)}</span>
-  <h4>{esc(r.get('title'))}</h4>
+  <h3 class="risk-title">{esc(r.get('title'))}</h3>
   <dl><dt>Why it matters</dt><dd>{esc(r.get('why'))}</dd>
       <dt>Evidence</dt><dd>{esc(r.get('evidence'))}</dd>
       <dt>Do this</dt><dd>{esc(r.get('recommendation'))}</dd></dl>
@@ -495,7 +522,7 @@ class Report:
                     continue
                 cards.append(f"""
 <div class="card risk {esc(x['severity'])}">{sev_chip(x['severity'])} <span class="label" style="margin-left:6px">{esc(scoring.DOMAINS.get(x['domain'], {}).get('name', ''))}</span>
-  <h4>{esc(x['title'])}</h4>
+  <h3 class="risk-title">{esc(x['title'])}</h3>
   <dl><dt>Finding</dt><dd>{esc(x.get('summary'))}</dd>
       <dt>Why it matters</dt><dd>{esc(x.get('details'))}</dd>
       <dt>Do this</dt><dd>{esc(x.get('recommendation'))}</dd></dl>
@@ -582,8 +609,10 @@ class Report:
         return f"""
 <section class="block" id="findings">
   <div class="section-head"><div><h2>Findings</h2>
-  <p>Tenant-level checks computed from AzGovViz output and Azure Resource Graph. Open a finding for the evidence and the fix.
-  Failing and warning findings are shown first; use the filters to include passed controls.</p></div>
+  <p>Tenant-level checks computed from AzGovViz output and Azure Resource Graph, grouped by design area.
+  <span class="screen-only">Open a finding for the evidence and the fix. Failing and warning findings are shown first; use the
+  filters to include passed controls.</span><span class="print-inline">Gaps are shown with evidence and the recommended fix;
+  passed and informational checks are listed in one line each.</span></p></div>
   <button type="button" class="more-btn no-print" id="expandAll" aria-pressed="false">Expand all</button></div>
   <div class="filters" data-target="details.finding" data-groups=".domain-group" data-print-all>
     <input type="search" placeholder="Search findings, resources, IDs…" aria-label="Search findings">
@@ -605,6 +634,9 @@ class Report:
                 ev_html += f'<div class="trunc-note">Showing {len(ev["rows"])} of {ev["total"]:,} rows – full data in the AzGovViz CSV / inventory files.</div>'
             if ev.get("note"):
                 ev_html += f'<div class="trunc-note">{esc(ev["note"])}</div>'
+            if len(ev["rows"]) > PRINT_EVIDENCE_ROWS:
+                ev_html += (f'<div class="trunc-note print-only">Printed: first {PRINT_EVIDENCE_ROWS} of '
+                            f'{max(len(ev["rows"]), ev.get("total", 0)):,} rows. The HTML report lists them all.</div>')
             ev_html = f'<div><h5>Evidence</h5>{ev_html}</div>'
         refs = "".join(f'<a href="{esc(safe_url(r.get("url")))}" target="_blank" rel="noopener">{esc(r.get("title"))}</a>'
                        for r in x.get("references") or [] if safe_url(r.get("url")))
@@ -678,7 +710,7 @@ class Report:
   {f"(commit <code>{esc((src.get('commit') or '')[:7])}</code>)" if src.get('commit') else ''}, evaluated with their Azure Resource Graph queries
   against this tenant. Items without a query need a reviewer; several are answered by tenant evidence from the findings above.
   Results per checklist are also saved in the official <code>checklist_graph.sh</code> format for the review-checklists Excel
-  workbook: {' · '.join(f'<a href="../checklists/graph_results_{esc(c["key"])}.json">{esc(c["key"])}</a>' for c in self.cl["checklists"])}.</p></div></div>
+  workbook: {' · '.join(f'<a href="{esc(self.base)}/checklists/graph_results_{esc(c["key"])}.json">{esc(c["key"])}</a>' for c in self.cl["checklists"])}.</p></div></div>
   {''.join(cards)}
   {self.items_table(all_rows)}
 </section>"""
@@ -726,7 +758,7 @@ class Report:
 <tr class="item-row" data-status="{esc(st)}" data-severity="{esc((i.get('severity') or '').lower())}" data-checklist="{esc(c['key'])}" data-domain="{esc(dom)}" data-text="{esc(text)}">
   <td>{cl_chip(st)}{'<span class="assist">via finding</span>' if i.get('assistedBy') else ''}</td>
   <td>{sev_chip((i.get('severity') or 'info').lower())}</td>
-  <td><div>{esc(i.get('text'))}</div><div class="small muted">{esc(c['key'].upper())} · {esc(i.get('id') or i.get('guid', '')[:8])} · {esc(i.get('category'))}{(' · ' + esc(i.get('subcategory'))) if i.get('subcategory') else ''}</div></td>
+  <td><button type="button" class="row-toggle" aria-expanded="false">{esc(i.get('text'))}</button><div class="small muted">{esc(c['key'].upper())} · {esc(i.get('id') or i.get('guid', '')[:8])} · {esc(i.get('category'))}{(' · ' + esc(i.get('subcategory'))) if i.get('subcategory') else ''}</div></td>
   <td class="num nowrap small">{counts_txt}</td>
 </tr>
 <tr class="detail-row" hidden><td colspan="4">
@@ -776,7 +808,8 @@ class Report:
                      "yes" if s.get("activityLogExport") else ("no" if s.get("activityLogExport") is False else "–")]
                     for s in subs]
         sub_table = data_table(["Subscription", "ID", "State", "Management group path", "Offer", "Resources", "RGs",
-                                "Secure score", "Defender plans on", "Budget", "Activity log export"], sub_rows, numeric=[5, 6, 8])
+                                "Secure score", "Defender plans on", "Budget", "Activity log export"], sub_rows, numeric=[5, 6, 8],
+                               cls="data subs-table", label="Subscriptions")
         inv = self.f.get("inventorySummary") or {}
         types = [(re.sub(r"^microsoft\.", "", t["type"]), t["n"]) for t in inv.get("types", [])]
         regions = [(r["location"], r["n"]) for r in inv.get("locations", [])]
@@ -830,12 +863,12 @@ class Report:
         q = cls.get("queries") or {}
         links = []
         if azv.get("html"):
-            links.append(f'<a href="../azgovviz/{esc(azv["html"])}">AzGovViz HTML report</a>')
-        links.append('<a href="../analysis/findings.json">findings.json</a>')
-        links.append('<a href="../analysis/brief.md">brief.md</a>')
+            links.append(f'<a href="{esc(self.base)}/azgovviz/{esc(azv["html"])}">AzGovViz HTML report</a>')
+        links.append(f'<a href="{esc(self.base)}/analysis/findings.json">findings.json</a>')
+        links.append(f'<a href="{esc(self.base)}/analysis/brief.md">brief.md</a>')
         if cls.get("available"):
-            links.append('<a href="../checklists/results.json">checklists/results.json</a>')
-        links.append('<a href="../inventory.json">inventory.json</a>')
+            links.append(f'<a href="{esc(self.base)}/checklists/results.json">checklists/results.json</a>')
+        links.append(f'<a href="{esc(self.base)}/inventory.json">inventory.json</a>')
         inv_err = (src.get("inventory") or {}).get("errors") or {}
         limitations = []
         if not azv.get("available"):
@@ -846,19 +879,31 @@ class Report:
             limitations.append(f"Analyzer {e['analyzer']} failed: {e['error']}")
         if self.ai_problems:
             limitations.append("AI insights file has validation warnings: " + "; ".join(self.ai_problems[:5]))
+        if not cls.get("available"):
+            limitations.append("The Azure review checklists were not evaluated (skipped or could not be downloaded).")
         limitations.append("Checklist queries return what the signed-in identity can read; items without a query need human review.")
         lim = "".join(f"<li>{esc(l)}</li>" for l in limitations)
+        steps = []
+        if azv.get("available"):
+            took = f" in {util.human_duration(stage.get('durationSec') or 0)}" if stage.get("durationSec") else ""
+            steps.append(f"<li><b>AzGovViz</b> {esc(azv.get('version') or '')} collected the management group hierarchy, "
+                         f"Azure Policy, RBAC, Defender for Cloud, network and resource data read-only{took}.</li>")
+        if (src.get("inventory") or {}).get("available"):
+            steps.append("<li><b>Azure Resource Graph</b> provided inventory, Defender for Cloud, Advisor, policy-state and "
+                         "configuration evidence.</li>")
+        if cls.get("available"):
+            keys = ", ".join(c.get("key", "").upper() for c in (self.cl or {}).get("checklists", []))
+            commit = f" from commit <code>{esc((clsrc.get('commit') or '')[:7])}</code>" if clsrc.get("commit") else ""
+            steps.append(f"<li><b>Azure review checklists</b> ({esc(keys)}) were evaluated with "
+                         f"{fmt_int(q.get('unique'))} Resource Graph queries{commit}.</li>")
+        steps = "".join(steps)
         return f"""
 <section class="block" id="method">
   <div class="section-head"><div><h2>Method and sources</h2></div></div>
   <div class="grid-2">
     <div class="card pad"><h3>How this assessment was produced</h3>
       <ol class="prose small" style="margin-top:10px">
-        <li><b>AzGovViz</b> {esc(azv.get('version') or '')} collected the management group hierarchy, Azure Policy, RBAC, Defender for Cloud,
-        network and resource data read-only{f" in {util.human_duration(stage.get('durationSec') or 0)}" if stage.get('durationSec') else ''}.</li>
-        <li><b>Azure Resource Graph</b> provided inventory, Defender for Cloud, Advisor, policy-state and configuration evidence.</li>
-        <li><b>Azure review checklists</b> ({esc(', '.join(c.get('key', '').upper() for c in (self.cl or {}).get('checklists', [])))})
-        were evaluated with {fmt_int(q.get('unique'))} Resource Graph queries{f" from commit <code>{esc((clsrc.get('commit') or '')[:7])}</code>" if clsrc.get('commit') else ''}.</li>
+        {steps}
         <li>Findings are scored by severity (high 3, medium 2, low 1; warnings earn half credit). Design-area scores blend tenant checks (60%)
         and checklist results (40%); the overall score is the mean of assessed design areas.</li>
         <li>Maturity levels: Initial &lt;40, Developing 40–59, Defined 60–74, Managed 75–89, Optimized ≥90.</li>
@@ -877,8 +922,77 @@ class Report:
 </section>"""
 
     # -- page --
+    # -- print / PDF --
+    def print_cover(self) -> str:
+        """First PDF page: who, when, the score and where it sits on the maturity scale (hidden on screen)."""
+        ov = self.scores.get("overall") or {}
+        rating = ov.get("rating") or {}
+        facts = self.facts
+        src = self.f.get("sources") or {}
+        azv = src.get("azgovviz") or {}
+        clsrc = (src.get("checklists") or {}).get("source") or {}
+        evidence = []
+        if azv.get("available"):
+            evidence.append(f"AzGovViz {azv.get('version') or ''}".strip())
+        if (src.get("inventory") or {}).get("available"):
+            evidence.append("Azure Resource Graph")
+        if (src.get("checklists") or {}).get("available"):
+            evidence.append("Azure review checklists" + (f" @{clsrc.get('commit', '')[:7]}" if clsrc.get("commit") else ""))
+        gaps = sum(1 for x in self.findings if x["status"] in ("fail", "warn") and x["severity"] in ("critical", "high"))
+        evaluated = sum((c.get("evaluated") or 0) for c in (self.f.get("summary") or {}).get("checklists", []))
+        stats = [("Subscriptions", facts.get("subscriptions")), ("Resources", facts.get("resources")),
+                 ("Policy assignments", facts.get("policyAssignments")), ("Role assignments", facts.get("roleAssignments")),
+                 ("High-severity gaps", gaps), ("Checklist items tested", evaluated if facts.get("checklistQueries") else None)]
+        stats_html = "".join(f'<div><div class="n">{fmt_int(v)}</div><div class="k">{esc(k)}</div></div>' for k, v in stats)
+        verdict = ""
+        if self.ai and self.ai.get("overallAssessment"):
+            verdict = (f'<div class="pc-verdict">{esc(self.ai["overallAssessment"])}'
+                       f'<span class="src">AI analysis · {esc(self.ai.get("generatedBy") or "GitHub Copilot")}</span></div>')
+        scope = (self.f.get("scope") or {}).get("description") or "Tenant root management group"
+        ids = " · ".join(v for v in (self.tenant.get("defaultDomain"), self.tenant.get("tenantId")) if v)
+        return f"""
+<section class="print-cover">
+  <div class="pc-band">
+    <div class="pc-mark">{LOGO_SVG}<span>Azure governance assessment</span></div>
+    <div class="pc-tenant">{esc(self.tenant_name)}</div>
+    <div class="pc-ids">{esc(ids)}</div>
+    <div class="pc-meta">
+      <div><span class="k">Scope</span><span class="v">{esc(scope)}</span></div>
+      <div><span class="k">Assessed</span><span class="v">{esc(self.date())}</span></div>
+      <div><span class="k">Evidence</span><span class="v">{esc(" · ".join(evidence) or "n/a")}</span></div>
+    </div>
+  </div>
+  <div class="pc-body">
+    <div class="pc-score">
+      <div class="label">Governance maturity score</div>
+      <div class="pc-num">{fmt_score(ov.get('score'))}<small>/ 100</small></div>
+      <div class="pc-level"><span class="lvl">Level {esc(rating.get('level') or '–')} of 5</span>{esc(rating.get('name', 'Not assessed'))}
+        <p>{esc(rating.get('description', ''))}</p></div>
+      {self.trend_line()}
+    </div>
+    <div class="pc-path">{glide_path(ov.get('score'))}</div>
+    {verdict}
+    <div class="pc-stats">{stats_html}</div>
+  </div>
+  <div class="pc-foot">
+    <div><b>Read-only assessment.</b> Evidence was collected with read permissions only; verify findings before acting.
+      Not an official Microsoft attestation.</div>
+    <div><b>Confidential.</b> Contains tenant configuration data (identities, scopes, resource names).</div>
+    <div>Prepared with the {esc(TOOL_NAME)} {esc(__version__)} plugin for GitHub Copilot CLI.</div>
+  </div>
+</section>"""
+
+    def page_css(self) -> str:
+        """Running footer for the PDF: CSS page-margin boxes need literal strings, so they are generated here."""
+        left = css_str(f"Azure Governance Assessment · {self.tenant_name} · {self.date()}")
+        box = 'font: 500 8pt/1.3 "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; color: #5f6877;'
+        return (f"@page {{ @bottom-left {{ content: {left}; {box} }} "
+                f"@bottom-right {{ content: \"Page \" counter(page) \" of \" counter(pages); {box} }} }} "
+                "@page :first { @bottom-left { content: none; } @bottom-right { content: none; } }")
+
     def render(self) -> str:
         css = (ASSETS / "report.css").read_text(encoding="utf-8") + EXTRA_CSS
+        print_css = (ASSETS / "report-print.css").read_text(encoding="utf-8") + self.page_css()
         js = (ASSETS / "report.js").read_text(encoding="utf-8")
         fails = sum(1 for x in self.findings if x["status"] in ("fail", "warn"))
         cl_fail = sum((c.get("statusCounts") or {}).get("non_compliant", 0) + (c.get("statusCounts") or {}).get("partial", 0)
@@ -888,9 +1002,6 @@ class Report:
                ("environment", "Environment", ""), ("method", "Method and sources", "")]
         nav_html = "".join(f'<a href="#{k}">{esc(t)}<span class="count">{esc(c)}</span></a>' for k, t, c in nav)
         title = f"Azure Governance Assessment – {self.tenant_name} – {self.date()}"
-        logo = ('<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18" stroke="currentColor" stroke-width="2"/>'
-                '<path d="M5 20V15h3v5M10.5 20V11h3v9M16 20V7h3v13" fill="none" stroke="currentColor" stroke-width="1.8"/>'
-                '<path d="M4 9.5 L19 3.5" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2 2.2"/></svg>')
         return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -899,11 +1010,13 @@ class Report:
 <meta name="generator" content="{esc(TOOL_NAME)} {esc(__version__)}">
 <title>{esc(title)}</title>
 <style>{css}</style>
+<style media="print">{print_css}</style>
 </head>
 <body>
+{self.print_cover()}
 <header class="topbar"><div class="topbar-inner">
-  <div class="mark">{logo}<span>Governance assessment</span></div>
-  <div class="title">{esc(self.tenant_name)} · {esc(self.date())}</div>
+  <div class="mark">{LOGO_SVG}<span>Governance assessment</span></div>
+  <h1 class="title">{esc(self.tenant_name)} · {esc(self.date())}</h1>
   <div class="spacer"></div>
   <button type="button" id="themeToggle" aria-label="Toggle dark mode">Theme</button>
   <button type="button" id="printBtn">Print / PDF</button>
@@ -911,8 +1024,6 @@ class Report:
 <div class="layout">
   <nav class="toc" aria-label="Sections"><div class="label">Contents</div>{nav_html}</nav>
   <main>
-    <div class="print-title"><div class="label">Azure governance assessment</div><h1>{esc(self.tenant_name)}</h1>
-      <div class="ink2">{esc(self.date())} · generated by the {esc(TOOL_NAME)} plugin for GitHub Copilot CLI</div></div>
     {self.summary()}
     {self.scorecard()}
     {self.risks()}
@@ -925,7 +1036,7 @@ class Report:
 </div>
 <footer class="foot">Generated by the {esc(TOOL_NAME)} plugin for GitHub Copilot CLI from AzGovViz (Azure Governance Visualizer)
 and Azure/review-checklists evidence. Read-only assessment; verify findings before acting. Not an official Microsoft attestation.</footer>
-<div id="tip" role="tooltip"></div>
+<div id="tip" aria-hidden="true"></div>
 <script>{js}</script>
 </body>
 </html>"""
@@ -938,12 +1049,13 @@ EXTRA_CSS = """
 .meter-h .tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--panel); }
 .meter-h .val { font: 650 15px/1 var(--display); min-width: 34px; text-align: right; }
 .stackbar { display: flex; gap: 2px; height: 26px; margin: 14px 0 10px; }
-.stackbar > div { min-width: 3px; display: flex; align-items: center; justify-content: center; font: 650 12px/1 var(--sans); color: var(--ink); }
+.stackbar > div { min-width: 3px; display: flex; align-items: center; justify-content: center; font: 650 12px/1 var(--sans); color: #0f1b2d; }
 .stackbar > div:first-child { border-radius: 5px 0 0 5px; }
 .stackbar > div:last-child { border-radius: 0 5px 5px 0; }
 .stackbar > div:only-child { border-radius: 5px; }
 .stackbar > div.on-dark { color: #fff; }
 .stackbar > div.seg-manual { box-shadow: inset 0 0 0 1px var(--rule-strong); }
+.stackbar > div.seg-manual, .stackbar > div.seg-no_data { color: var(--ink); }  /* theme-dependent backgrounds */
 .stackbar.mini { height: 10px; margin: 2px 0; min-width: 140px; }
 .hbars { display: grid; gap: 7px; }
 .hb-row { display: grid; grid-template-columns: minmax(120px, 46%) minmax(0, 1fr) 54px; gap: 10px; align-items: center; font-size: 13px; }
@@ -951,7 +1063,6 @@ EXTRA_CSS = """
 .hb-track { height: 14px; display: block; }
 .hb-fill { display: block; height: 14px; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 2px; }
 .hb-val { text-align: right; font-weight: 600; }
-.print-title { display: none; }
 .trend { margin-top: 6px; color: var(--ink-2); }
 .delta { font: 700 12.5px/1 var(--mono); padding: 2px 6px; border-radius: 5px; background: var(--neutral-wash); color: var(--ink); white-space: nowrap; }
 .delta.up { background: var(--good-wash); }
@@ -959,10 +1070,6 @@ EXTRA_CSS = """
 td .delta { margin-left: 8px; }
 ul.quick { margin: 0; padding-left: 18px; }
 ul.quick li { margin: 6px 0; }
-@media print {
-  .print-title { display: block; margin: 0 0 18px; padding-bottom: 12px; border-bottom: 1.5px solid var(--ink); }
-  .print-title h1 { font: 700 26px/1.2 var(--display); margin: 4px 0; }
-}
 """
 
 
@@ -977,7 +1084,7 @@ def _rating_cls(score: Optional[float]) -> str:
 
 
 def render_run(run_dir: Path, output: Optional[Path] = None) -> Path:
-    rep = Report(run_dir)
+    rep = Report(run_dir, output.parent if output else None)
     page = rep.render()
     if output is None:
         label = util.slug((rep.tenant.get("defaultDomain") or rep.tenant_name).split(".")[0], 30)
@@ -1024,6 +1131,7 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
         pdf_path.unlink()
     with tempfile.TemporaryDirectory(prefix="azgov-pdf-") as profile:
         proc = subprocess.Popen([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                                 "--generate-pdf-document-outline",  # PDF bookmarks from the headings
                                  "--no-first-run", "--no-default-browser-check", f"--user-data-dir={profile}",
                                  f"--print-to-pdf={pdf_path}", "--virtual-time-budget=5000",
                                  html_path.resolve().as_uri() + "#print"],

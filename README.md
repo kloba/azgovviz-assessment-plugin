@@ -2,7 +2,8 @@
 
 Run **AzGovViz** (Azure Governance Visualizer) on a selected Microsoft Entra tenant, evaluate the
 **Azure/review-checklists** (Azure Landing Zone, Well-Architected, APRL and more) with Azure Resource Graph,
-let Copilot analyse the evidence, and get a **scored, self-contained HTML assessment report**.
+let Copilot analyse the evidence, and get a **scored PDF assessment report** (plus the same report as an
+interactive, self-contained HTML file).
 
 ```text
 copilot> /azgov-assess <tenant-id>
@@ -11,7 +12,7 @@ copilot> /azgov-assess <tenant-id>
   ARG        Resource Graph inventory + ALZ / WAF / APRL checklist queries
   analysis   ~60 scored platform findings, nine design areas, maturity level
   Copilot    executive summary, top risks, 30/90/180-day roadmap (analysis/ai-insights.json)
-  report     azgov-assessments/<tenant>_<timestamp>/report/Azure-Governance-Assessment_<tenant>_<date>.html
+  report     azgov-assessments/<tenant>_<timestamp>/report/Azure-Governance-Assessment_<tenant>_<date>.pdf (+ .html)
 ```
 
 ![Report preview (synthetic demo tenant)](docs/report-preview.png)
@@ -27,20 +28,25 @@ copilot> /azgov-assess <tenant-id>
 | **Azure review checklists** | Every ALZ/WAF/APRL item with a Resource Graph query evaluated per resource (compliant / partial / non-compliant / not applicable), manual ALZ items answered with tenant evidence where possible, full searchable item list, export for the official Excel workbook. |
 | **Environment** | Management-group tree, subscriptions table (secure score, Defender plans, budgets, activity-log export), resources by type and region, Advisor and Defender recommendations. |
 
-The report is a single HTML file (no external scripts or fonts), with light/dark themes, filters, and a print/PDF layout.
+The **PDF** (A4) has a cover page with the score and maturity scale, numbered sections and page numbers; it is printed
+with headless Microsoft Edge / Google Chrome / Chromium. The **HTML** version is a single file (no external scripts or
+fonts) with light/dark themes and filters. Without a Chromium-based browser only the HTML is produced (it prints to PDF
+from any browser).
 
 ## Install
 
 Requirements: **GitHub Copilot CLI**, **Python 3.9+**, **PowerShell 7** (for AzGovViz), git (optional).
 Az.Accounts and AzAPICall are installed automatically into the current user scope when missing.
 
-The plugin folder is also a one-plugin marketplace (`.github/plugin/marketplace.json`):
+The repository is a one-plugin marketplace (`.github/plugin/marketplace.json`):
 
 ```bash
-copilot plugin marketplace add /absolute/path/to/azgovviz-assessment-plugin
+copilot plugin marketplace add kloba/azgovviz-assessment-plugin
 copilot plugin install azgovviz-assessment@azgovviz-assessment-marketplace
 copilot plugin list                                     # -> azgovviz-assessment
 ```
+
+From a local clone use the absolute path instead: `copilot plugin marketplace add /path/to/azgovviz-assessment-plugin`.
 
 Inside Copilot CLI you now have:
 
@@ -57,7 +63,7 @@ Inside Copilot CLI you now have:
 Ask in natural language, or use the commands:
 
 ```text
-> Assess the Azure governance of tenant <tenant-id> and give me the HTML report
+> Assess the Azure governance of tenant <tenant-id> and give me the PDF report
 > /azgov-checklists <tenant-id> --checklists alz,waf,aprl,aks
 > Who has Owner on the production subscription in the last assessment?
 ```
@@ -84,7 +90,7 @@ $S/azgov-assess run --tenant <id> [--subscriptions a,b] [--checklists alz,waf,ap
 $S/azgov-assess run --tenant <id> --skip-azgovviz            # Resource Graph + checklists only
 $S/azgov-assess insights-template --run-dir <run>           # contract for the AI analysis step
 $S/azgov-assess validate-insights --run-dir <run>
-$S/azgov-assess report --run-dir <run> [--open] [--pdf]       # --pdf prints via headless Edge/Chrome
+$S/azgov-assess report --run-dir <run> [--open] [--no-pdf]    # PDF + HTML (PDF via headless Edge/Chrome)
 $S/azgov-assess report --run-dir <run> --baseline <older-run> # adds score deltas and changed findings
 ```
 
@@ -92,7 +98,7 @@ Pipeline and outputs:
 
 ```
 AzGovViz (pwsh, read-only) ─┐
-Resource Graph inventory  ──┼─> analysis/findings.json ──> Copilot writes analysis/ai-insights.json ──> report/*.html
+Resource Graph inventory  ──┼─> analysis/findings.json ──> Copilot writes analysis/ai-insights.json ──> report/*.pdf + .html
 review-checklists (ARG)   ──┘        (scores, findings)        (exec summary, risks, roadmap)
 ```
 
@@ -100,7 +106,7 @@ review-checklists (ARG)   ──┘        (scores, findings)        (exec summa
 azgov-assessments/<tenant>_<timestamp>/
   run.json  azgovviz/  inventory.json  checklists/results.json  checklists/graph_results_<key>.json
   analysis/findings.json  analysis/checklists.assessed.json  analysis/brief.md  analysis/ai-insights.json
-  report/Azure-Governance-Assessment_<tenant>_<date>.html
+  report/Azure-Governance-Assessment_<tenant>_<date>.pdf  (+ .html)
 ```
 
 ### How checklist results are interpreted

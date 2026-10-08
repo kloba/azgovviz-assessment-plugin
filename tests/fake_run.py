@@ -252,7 +252,9 @@ def main(out_root: str, with_azgovviz: bool = False, with_checklists: bool = Tru
     src.resolve_commit()
     ev = cl.ChecklistEvaluator(FakeClient(), src, inv["typeCountMap"], workers=1)
     results = ev.evaluate(["alz", "waf", "aprl"], progress=False)
-    util.write_json(run_dir / "checklists" / "results.json", results)
+    for c in results["checklists"]:  # same order as the CLI: workbook export first, then the stripped results
+        util.write_json(run_dir / "checklists" / f"graph_results_{c['key']}.json", cl.official_graph_results(results, c["key"]))
+    util.write_json(run_dir / "checklists" / "results.json", cl.strip_private(results))
     return run_dir
 
 

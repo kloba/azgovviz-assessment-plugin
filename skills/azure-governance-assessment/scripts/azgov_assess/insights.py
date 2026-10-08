@@ -7,7 +7,8 @@ merges `analysis/ai-insights.json` into the HTML report (and the report stays co
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import json
+from typing import Any, Dict, List, Tuple
 
 SCHEMA = "azgov-assess/ai-insights@1"
 
@@ -60,6 +61,17 @@ def template(findings: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def load(path: Any) -> Tuple[Any, List[str]]:
+    """(data, problems) for analysis/ai-insights.json; invalid JSON is a problem, never a crash."""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            return json.load(fh), []
+    except FileNotFoundError:
+        return None, []
+    except ValueError as exc:
+        return None, [f"ai-insights.json is not valid JSON: {exc}"]
+
+
 def _text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
@@ -106,7 +118,7 @@ def validate(data: Dict[str, Any], findings: Dict[str, Any]) -> List[str]:
             continue
         if not isinstance(risk.get("severity"), str) or risk["severity"].lower() not in _SEVERITIES:
             problems.append(f"keyRisks[{i}].severity must be one of {sorted(_SEVERITIES)}")
-        if risk.get("domain") is not None and risk.get("domain") not in _DOMAINS:
+        if risk.get("domain") is not None and not (isinstance(risk.get("domain"), str) and risk["domain"] in _DOMAINS):
             problems.append(f"keyRisks[{i}].domain '{risk.get('domain')}' is not a known domain key")
         _ids(risk.get("relatedFindings"), f"keyRisks[{i}]", known_ids, problems)
         for key in ("title", "why", "recommendation"):
@@ -142,7 +154,7 @@ def validate(data: Dict[str, Any], findings: Dict[str, Any]) -> List[str]:
         problems.append("domainCommentary must be an object keyed by domain")
         commentary = {}
     for key, text in (commentary or {}).items():
-        if key not in _DOMAINS:
+        if not isinstance(key, str) or key not in _DOMAINS:
             problems.append(f"domainCommentary key '{key}' is not a known domain")
         elif not isinstance(text, str):
             problems.append(f"domainCommentary.{key} must be a string")
@@ -175,7 +187,7 @@ def sanitize(data: Any) -> Any:
             continue
         sev = text(r.get("severity")).lower()
         risks.append({"title": text(r.get("title")), "severity": sev if sev in _SEVERITIES else "medium",
-                      "domain": r.get("domain") if r.get("domain") in _DOMAINS else None,
+                      "domain": r["domain"] if isinstance(r.get("domain"), str) and r["domain"] in _DOMAINS else None,
                       "why": text(r.get("why")), "evidence": text(r.get("evidence")),
                       "recommendation": text(r.get("recommendation")), "relatedFindings": ids(r.get("relatedFindings"))})
     out["keyRisks"] = risks

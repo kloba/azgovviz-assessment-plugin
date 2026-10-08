@@ -1,0 +1,164 @@
+/* Azure Governance Assessment - print / PDF layout (A4 portrait). Loaded with media="print".
+   The running footer (tenant name, page x of y) is generated per report in report.py. */
+@page { size: A4; margin: 16mm 15mm 17mm; }
+@page :first { margin: 0; }
+
+/* Always print the light palette - also when the reader switched the HTML to dark mode. */
+:root {
+  color-scheme: light !important;
+  --paper: #ffffff !important; --panel: #ffffff !important; --panel-2: #f3f5f8 !important;
+  --ink: #0f1b2d !important; --ink-2: #3d4a5e !important; --muted: #5f6877 !important;
+  --rule: #dfe4eb !important; --rule-strong: #c4cdd9 !important; --brand: #17457f !important; --link: #1c5cab !important;
+  --series-1: #2a78d6 !important; --track: #dce8f8 !important;
+  --ord-1: #86b6ef !important; --ord-2: #5598e7 !important; --ord-3: #2a78d6 !important; --ord-4: #1c5cab !important; --ord-5: #104281 !important;
+  --good-wash: #e7f6e7 !important; --warning-wash: #fff6e0 !important; --serious-wash: #fdeee8 !important;
+  --critical-wash: #fbe9e9 !important; --neutral-wash: #eef1f5 !important; --shadow: none !important;
+}
+/* status colours carry meaning: print them even when "background graphics" is off */
+* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html, body { background: #fff !important; }
+body { font-size: 12.5px; line-height: 1.5; }
+a { color: inherit; text-decoration: none; }
+.topbar, nav.toc, .filters, .more-btn, #tip, .no-print, footer.foot { display: none !important; }
+.layout { display: block; max-width: none; padding: 0; gap: 0; }
+.print-only { display: block !important; }
+.print-inline { display: inline !important; }
+.screen-only { display: none !important; }
+.small { font-size: 10.5px; }
+.chip { font-size: 10.5px; padding: 3px 7px 3px 5px; }
+.chip .dot { width: 8px; height: 8px; }
+.print-note { display: block !important; font-size: 11px; }
+.print-note:empty { display: none !important; }
+.tbl-wrap { max-height: none !important; overflow: visible !important; }
+.card { box-shadow: none; }
+p, li, dd { orphans: 3; widows: 3; }
+h2, h3, h4, h5, .dg-head, .section-head { break-after: avoid-page; }
+
+/* ---------- cover ---------- */
+.print-cover { display: flex !important; flex-direction: column; width: 210mm; height: 296.5mm; overflow: hidden;
+  break-after: page; background: #fff; color: var(--ink); }
+.pc-band { background: var(--brand); color: #fff; padding: 20mm 18mm 13mm; }
+.pc-mark { display: flex; align-items: center; gap: 9px; font: 600 9.5px/1 var(--mono); letter-spacing: .18em;
+  text-transform: uppercase; color: rgba(255, 255, 255, .82); }
+.pc-mark svg { color: #fff; }
+.pc-tenant { font: 700 40px/1.08 var(--display); letter-spacing: -.02em; margin: 15mm 0 3mm; overflow-wrap: anywhere; }
+.pc-ids { font: 500 11px/1.5 var(--mono); color: rgba(255, 255, 255, .78); overflow-wrap: anywhere; }
+.pc-meta { display: grid; grid-template-columns: 1.15fr .75fr 1.4fr; gap: 0 8mm; margin-top: 10mm; padding-top: 4mm;
+  border-top: 1px solid rgba(255, 255, 255, .35); }
+.pc-meta .k { display: block; font: 600 8.5px/1.6 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: rgba(255, 255, 255, .7); }
+.pc-meta .v { font: 600 12px/1.4 var(--sans); overflow-wrap: anywhere; }
+.pc-body { flex: 1; padding: 11mm 18mm 0; display: flex; flex-direction: column; gap: 7mm; }
+.pc-score { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10mm; align-items: end; }
+.pc-score .label { grid-column: 1 / -1; margin-bottom: 2mm; }
+.pc-num { font: 700 84px/.9 var(--display); letter-spacing: -.04em; color: var(--ink); }
+.pc-num small { font: 600 20px/1 var(--display); color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.pc-level { font: 650 26px/1.15 var(--display); }
+.pc-level .lvl { display: block; font: 600 10px/1.8 var(--mono); letter-spacing: .12em; color: var(--muted); }
+.pc-level p { font: 400 12.5px/1.45 var(--sans); color: var(--ink-2); margin: 3px 0 0; }
+.pc-score .trend { grid-column: 1 / -1; margin-top: 4mm; font-size: 11.5px; }
+.pc-path .glide { width: 100%; height: auto; max-height: 64mm; }
+.pc-verdict { font: 600 15px/1.45 var(--display); color: var(--ink); border-left: 3px solid var(--brand); padding: 1mm 0 1mm 5mm; }
+.pc-verdict .src { display: block; font: 600 8.5px/1.8 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.pc-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1.5px solid var(--ink); border-bottom: 1px solid var(--rule-strong); }
+.pc-stats > div { padding: 3.5mm 3mm 3.5mm 0; }
+.pc-stats .n { font: 650 22px/1.1 var(--display); }
+.pc-stats .k { font: 600 8px/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.pc-foot { padding: 6mm 18mm 11mm; font-size: 9.5px; line-height: 1.5; color: var(--muted); display: grid; gap: 2mm; }
+.pc-foot b { color: var(--ink-2); }
+
+/* ---------- sections ---------- */
+main { counter-reset: sec; }
+section.block { break-before: page; margin: 0; }
+section.block > .section-head { border-top: 3px solid var(--brand); padding-top: 8px; margin: 0 0 12px; }
+section.block > .section-head h2 { font-size: 23px; }
+section.block > .section-head h2::before { counter-increment: sec; content: counter(sec); color: var(--brand); display: inline-block; min-width: 1.35em; }
+section.block > .section-head p { font-size: 12px; max-width: none; }
+.card.pad, .pad { padding: 12px 14px; }
+
+/* executive summary: score and maturity scale are on the cover */
+.plate { border-width: 1px; border-radius: 6px; break-inside: avoid; }
+.plate-head, .plate-body { display: none !important; }
+.plate-foot { border-top: 0 !important; grid-template-columns: repeat(6, minmax(0, 1fr)) !important; }
+.plate-foot > div { padding: 8px 10px; border-bottom: 0 !important; border-right: 1px solid var(--rule-strong) !important; }
+.plate-foot > div:last-child { border-right: 0 !important; }
+.plate-foot .value { font-size: 20px; }
+.sev-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 8px; margin-top: 10px; }
+.sev-tile { padding: 9px 12px; break-inside: avoid; }
+.sev-tile .value { font-size: 24px; }
+.prose { font-size: 12.5px; line-height: 1.6; max-width: none; }
+.verdict { font-size: 14.5px; }
+.ai-badge { font-size: 9.5px; }
+
+/* scores: one grid row per design area - commentary on the left, meter, maturity and check counts on the right */
+.scorecard { font-size: 12px; display: block; }
+.scorecard thead { display: none !important; }
+.scorecard tbody { display: block; }
+.scorecard tr { display: grid !important; grid-template-columns: minmax(0, 1fr) 200px 104px; grid-template-rows: auto 1fr;
+  column-gap: 14px; padding: 9px 2px; border-bottom: 1px solid var(--rule); break-inside: avoid; }
+.scorecard tr:last-child { border-bottom: 0; }
+.scorecard td { display: block !important; padding: 0 !important; border: 0 !important; width: auto !important; }
+.scorecard td:nth-child(1) { grid-column: 1; grid-row: 1 / span 2; }
+.scorecard td:nth-child(2) { grid-column: 2; grid-row: 1; }
+.scorecard td:nth-child(3) { grid-column: 3; grid-row: 1; text-align: right; }
+.scorecard td:nth-child(4) { grid-column: 2 / span 2; grid-row: 2; padding-top: 5px !important; }
+.scorecard .dname { font-size: 13px; }
+.scorecard .dblurb { font-size: 10.5px; }
+.scorecard .split { font-size: 9.5px; white-space: normal; }
+.meter-h .val { font-size: 13px; }
+.meter-h .track { min-width: 80px; }
+
+/* risks, strengths, roadmap: one column reads better on A4 */
+.grid-2, .grid-3, .roadmap { grid-template-columns: minmax(0, 1fr) !important; gap: 9px !important; }
+.risk { padding: 11px 14px; break-inside: avoid; }
+.risk h3.risk-title { font-size: 14px; }
+.risk dl { grid-template-columns: 100px minmax(0, 1fr); font-size: 12px; }
+.phase { padding: 11px 14px; break-inside: auto; }
+.phase li { break-inside: avoid; padding: 7px 0 7px 28px; }
+.phase li::before { top: 8px; }
+
+/* findings: full cards for gaps, one line for passed / informational checks */
+.domain-group { margin: 0 0 12px; }
+.domain-group > .dg-head { margin-top: 6px; }
+details.finding { margin: 0 0 6px; border-radius: 6px; break-inside: auto; }
+details.finding:not(:has(table)) { break-inside: avoid; }
+details.finding > summary { grid-template-columns: 82px 70px minmax(0, 1fr) auto !important; gap: 8px; padding: 7px 10px; break-after: avoid; }
+.f-body .small { font-size: 10px; }
+details.finding > summary .f-main { grid-column: auto !important; }
+details.finding .f-title { font-size: 12.5px; }
+details.finding .f-sum { font-size: 11.5px; }
+details.finding > .f-body { display: grid !important; padding: 8px 12px 10px; gap: 8px; font-size: 11.5px; }
+details.finding[data-status="pass"] > .f-body,
+details.finding[data-status="info"] > .f-body,
+details.finding[data-status="not_assessed"] > .f-body { display: none !important; }
+details.finding[data-status="pass"] > summary,
+details.finding[data-status="info"] > summary,
+details.finding[data-status="not_assessed"] > summary { border-bottom: 0 !important; }
+.f-body .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; gap: 12px; }
+.f-body table.data tbody tr:nth-child(n+11) { display: none; }
+.refs a, .fid { font-size: 10px; padding: 3px 5px; }
+
+/* tables: must never be wider than the page - Chrome would shrink the whole PDF to fit */
+table.data { font-size: 10.5px; width: 100%; }
+table.data th, table.data td { padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; }
+table.data th { position: static; font-size: 9px; letter-spacing: .03em; overflow-wrap: normal; }
+/* subscriptions: state and offer are the least useful columns on paper */
+.subs-table th:nth-child(3), .subs-table td:nth-child(3), .subs-table th:nth-child(5), .subs-table td:nth-child(5) { display: none; }
+table.data tr { break-inside: avoid; }
+table.data .mono, table.data code { font-size: 9.5px; overflow-wrap: anywhere; }
+
+/* checklists */
+.cl-card { break-inside: avoid; padding: 12px 14px; }
+.cl-head .score { font-size: 22px; }
+.stackbar { height: 20px; margin: 10px 0 8px; }
+.stackbar > div { font-size: 10.5px; }
+.legend { font-size: 10.5px; }
+.items-table tr.detail-row { display: none !important; }
+.items-table td:first-child { width: 112px; }
+.items-table th:last-child, .items-table td:last-child { width: 62px; white-space: nowrap; overflow-wrap: normal; }
+.items-table td { padding: 4px 6px; }
+
+/* environment */
+.tree { font-size: 11.5px; }
+.node { padding: 2px 6px; }
+.hb-row { font-size: 11px; }
+.kv { font-size: 12px; }

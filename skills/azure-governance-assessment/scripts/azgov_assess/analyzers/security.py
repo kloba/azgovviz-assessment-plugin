@@ -228,10 +228,11 @@ def security_findings(ctx) -> List[Finding]:
             references=[REF_TLS], source="Resource Graph", effort="low",
             alz=[ALZ["storage_secure_transfer"]]))
 
-        # SEC-010 network exposure of data stores
+    # SEC-010 network exposure of data stores (storage accounts and/or key vaults)
+    kv = ctx.inv("keyVaults") or []
+    if sa or kv:
         open_sa = [s for s in sa if (s.get("publicNetworkAccess") or "Enabled") != "Disabled"
                    and (s.get("defaultAction") or "Allow") == "Allow"]
-        kv = ctx.inv("keyVaults") or []
         # a vault behind its firewall (networkAcls.defaultAction = Deny) is not reachable from all networks; older
         # inventories lack the column (None), which keeps the previous behaviour
         open_kv = [k for k in kv if (k.get("publicNetworkAccess") or "Enabled") != "Disabled"
