@@ -3,3 +3,4 @@ __pycache__/
 azgov-assessments/
 .DS_Store
 *.pdf
+!docs/sample-report.pdf

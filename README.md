@@ -17,6 +17,9 @@ copilot> /azgov-assess <tenant-id>
 
 ![Report preview (synthetic demo tenant)](docs/report-preview.png)
 
+**[Sample report (PDF, 48 pages)](docs/sample-report.pdf)** – a synthetic demo tenant; the executive summary, risks and
+roadmap were written by the plugin's AI analysis step in GitHub Copilot CLI.
+
 ## What you get
 
 | | |

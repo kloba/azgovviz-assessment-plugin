@@ -880,6 +880,8 @@ class Report:
             limitations.append(f"Analyzer {e['analyzer']} failed: {e['error']}")
         if self.ai_problems:
             limitations.append("AI insights file has validation warnings: " + "; ".join(self.ai_problems[:5]))
+        if self.ai and (self.ai.get("notes") or "").strip():
+            limitations.append("AI analysis notes: " + self.ai["notes"].strip())
         if not cls.get("available"):
             limitations.append("The Azure review checklists were not evaluated (skipped or could not be downloaded).")
         limitations.append("Checklist queries return what the signed-in identity can read; items without a query need human review.")
