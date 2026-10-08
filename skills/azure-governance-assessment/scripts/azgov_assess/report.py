@@ -304,8 +304,8 @@ class Report:
     @property
     def assessed_at(self):
         """When the evidence was collected (run start) - re-analysing or re-rendering later must not change it."""
-        return (util.parse_iso(self.run.get("startedAt")) or util.parse_iso(self.f.get("generatedAt"))
-                or util.utcnow())
+        from .analysis import assessed_at
+        return util.parse_iso(assessed_at(self.dir, self.f)) or util.utcnow()
 
     def date(self) -> str:
         return self.assessed_at.strftime("%d %b %Y")

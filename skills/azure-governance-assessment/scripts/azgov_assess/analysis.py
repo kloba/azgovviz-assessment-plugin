@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import traceback
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -312,6 +314,25 @@ def _top_checklist_failures(result: Dict[str, Any], limit: int = 25) -> List[str
 _RANK = {"fail": 0, "warn": 1, "pass": 2}
 
 
+def assessed_at(run_dir: Optional[Path], findings: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """When a run's evidence was collected: AzGovViz output timestamp, else run start, else analysis time.
+    (Re-analysing an old run must not make it look recent.)"""
+    if run_dir:
+        for p in sorted(Path(run_dir).glob("azgovviz/AzGovViz_*_*.csv")):
+            m = re.match(r"AzGovViz_[^_]+_(\d{8})_(\d{6})_", p.name)
+            if m:
+                import datetime as _dt
+                try:  # AzGovViz names its files in the local time of the machine that ran it
+                    local = _dt.datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").astimezone()
+                except ValueError:
+                    continue
+                return util.iso(local.astimezone(_dt.timezone.utc))
+        started = (util.read_json(Path(run_dir) / "run.json", {}) or {}).get("startedAt")
+        if started:
+            return started
+    return (findings or {}).get("generatedAt")
+
+
 def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str = "") -> Dict[str, Any]:
     """Score and finding-status changes between a baseline findings.json and the current one."""
     def by_key(res):
@@ -366,7 +387,7 @@ def compare(current: Dict[str, Any], baseline: Dict[str, Any], baseline_dir: str
     return {
         "comparable": not source_diff,
         "sourceDiff": source_diff,
-        "baselineGeneratedAt": baseline.get("generatedAt"),
+        "baselineGeneratedAt": assessed_at(Path(baseline_dir) if baseline_dir else None, baseline),
         "baselineRun": baseline_dir,
         "baselineSources": {k: v.get("available") if isinstance(v, dict) else None
                             for k, v in (baseline.get("sources") or {}).items()},
