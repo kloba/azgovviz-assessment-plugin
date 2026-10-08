@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests (stdlib only, no Azure access)
+        run: python -m unittest discover -s tests -v
+      - name: Plugin manifests are valid JSON
+        run: python -c "import json; [json.load(open(p, encoding='utf-8')) for p in ('plugin.json', '.github/plugin/marketplace.json')]"
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $failed = $true; Write-Host "::error file=$($_.FullName)::$($errors -join '; ')" }
+          }
+          if ($failed) { exit 1 }
