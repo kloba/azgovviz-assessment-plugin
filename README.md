@@ -141,6 +141,13 @@ Severity weights high 3 / medium 2 / low 1 (warnings earn half credit). Design-a
 checks + 40% checklist items (each checklist GUID counted once). Overall = mean of assessed design areas.
 Levels: Initial < 40 ≤ Developing < 60 ≤ Defined < 75 ≤ Managed < 90 ≤ Optimized.
 
+### Trend against an earlier run
+
+`--baseline <older-run>` adds score deltas and the findings that changed status. The trend is marked
+*indicative* when the two runs are not like for like: different evidence (for example AzGovViz only vs.
+AzGovViz + Resource Graph + checklists), a different scope or checklist set, or a baseline scored with older
+assessment rules – re-score that one with `azgov-assess analyze --run-dir <older-run>`.
+
 ## Develop
 
 ```bash
