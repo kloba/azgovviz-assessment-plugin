@@ -429,6 +429,92 @@ QUERY_CORRECTIONS: Dict[str, Dict[str, Any]] = {
                  "| project recommendationId = '82b3cf6b-9ae2-2e44-b193-10793213f676', name, id, tags, "
                  "param1 = strcat('nic-name=', nicName)",
     },
+    # APRL "Ensure Resource Group and its Resources are located in the same Region" - a false pass
+    "98bd7098-49d6-491b-86f1-b143d6b1a0ff": {
+        "defect": r"\|\s*join\s*\(\s*resourcecontainers\s*\|\s*project\s+containerid",
+        "reason": "The upstream join keeps one arbitrary resource per resource group (Kusto's default innerunique join), so "
+                  "most mismatched resources are never reported, and it compares IDs case-sensitively. The corrected "
+                  "query lists every resource group that holds resources in another region.",
+        "query": (
+                 'resources'
+                 " | where location != 'global' and resourceGroup != 'networkwatcherrg' and split(id, '/', "
+                 "3)[0] =~ 'resourceGroups'"
+                 " | extend rgId = strcat_array(array_slice(split(id, '/'), 0, 4), '/'), "
+                 "rgKey = tolower(strcat_array(array_slice(split(id, '/'), 0, 4), '/'))"
+                 ' | join kind=inner (resourcecontainers'
+                 " | where type =~ 'microsoft.resources/subscriptions/resourcegroups'"
+                 ' | project rgKey = tolower(id), '
+                 'containerlocation = location) on $left.rgKey == $right.rgKey'
+                 ' | where location != containerlocation'
+                 ' | summarize mismatched = count(), example = take_any(name) by rgId, containerlocation'
+                 " | project recommendationId = '98bd7098-49d6-491b-86f1-b143d6b1a0ff', "
+                 "name = tostring(split(rgId, '/')[4]), id = rgId, tags = '', param1 = strcat(mismatched, "
+                 "' resource(s) outside the resource group region ', containerlocation, ', e.g. ', "
+                 'example)'),
+    },
+    # APRL "Store configuration as app settings" (App Service)
+    "0b80b67c-afbe-4988-ad58-a85a146b681e": {
+        "defect": r"extend\s+AppSettings\s*=\s*iif\(\s*isempty\(properties\.AppSettings\)\s*,\s*true\s*,\s*false\s*\)",
+        "reason": "The upstream query is inverted and reads app settings that Resource Graph does not expose, so it never "
+                  "reports an app.",
+    },
+    # APRL "Use Azure Disks with Zone Redundant Storage for higher resiliency and availability" - a false pass
+    "fa0cf4f5-0b21-47b7-89a9-ee936f193ce1": {
+        "defect": r"where\s+sku\.name\s+has_cs\s+'ZRS'\s+or\s+array_length\(zones\)\s*>\s*0",
+        "reason": "The upstream filter keeps only disks that are already zonal or zone-redundant, so the locally redundant "
+                  "disks it is meant to find are never reported. The corrected query lists every Premium and Standard SSD "
+                  "LRS disk (in a region without availability zones ZRS disks are not an option).",
+        "query": (
+                 'resources'
+                 " | where type =~ 'microsoft.compute/disks' and tostring(sku.name) in~ ('Premium_LRS', "
+                 "'StandardSSD_LRS')"
+                 " | project recommendationId = 'fa0cf4f5-0b21-47b7-89a9-ee936f193ce1', name, id, tags, "
+                 "param1 = tostring(sku.name), param2 = iff(array_length(zones) > 0, 'Zonal LRS disk', "
+                 "'Non-zonal LRS disk')"),
+    },
+    # APRL "Configure one or more read replicas" (PostgreSQL flexible server) - a false pass
+    "2ab85a67-26be-4ed2-a0bb-101b2513ec63": {
+        "defect": r'where\s+properties\.replicationRole\s*==\s*"AsyncReplica"',
+        "reason": "The upstream query reports the servers that are themselves read replicas, which meet the item, so a "
+                  "server without any replica is never reported.",
+        "query": (
+                 'resources'
+                 " | where type =~ 'microsoft.dbforpostgresql/flexibleservers'"
+                 " | where tostring(properties.replicationRole) !in~ ('AsyncReplica', 'GeoAsyncReplica')"
+                 ' | extend lid = tolower(id)'
+                 ' | join kind=leftouter (resources'
+                 " | where type =~ 'microsoft.dbforpostgresql/flexibleservers'"
+                 ' | where isnotempty(tostring(properties.sourceServerResourceId))'
+                 ' | summarize replicas = count() by lid = tolower(tostring(properties.sourceServerResourceId))) on lid'
+                 ' | where isnull(replicas)'
+                 " | project recommendationId = '2ab85a67-26be-4ed2-a0bb-101b2513ec63', name, id, tags, "
+                 "param1 = strcat('replicationRole:', tostring(properties.replicationRole), "
+                 "' (no read replica)')"),
+    },
+    # APRL "Configure continuous backup mode" (Cosmos DB) - a false pass
+    "e544520b-8505-7841-9e77-1f1974ee86ec": {
+        "defect": r"properties\.enableMultipleWriteLocations\s*==\s*false",
+        "reason": "The upstream query skips accounts with multi-region writes, which support continuous backup, and "
+                  "accounts that do not report the analytical-store setting.",
+        "query": (
+                 'resources'
+                 " | where type =~ 'Microsoft.DocumentDb/databaseAccounts' and tostring(properties.backupPolicy.type) =~ 'Periodic' and coalesce(tobool(properties.enableAnalyticalStorage), "
+                 'false) == false'
+                 " | project recommendationId = 'e544520b-8505-7841-9e77-1f1974ee86ec', name, id, tags"),
+    },
+    # APRL "Convert Classic Deployments" (Application Insights) - a false pass
+    "dac421ec-2832-4c37-839e-b6dc5a38f2fa": {
+        "defect": r"where\s+IngestionMode\s*=~\s*'ApplicationInsights'",
+        "reason": "The upstream query misses classic components that export with diagnostic settings "
+                  "('ApplicationInsightsWithDiagnosticSettings'); only 'LogAnalytics' is workspace-based.",
+        "query": (
+                 'resources'
+                 " | where type =~ 'microsoft.insights/components'"
+                 " | where tostring(properties.IngestionMode) in~ ('ApplicationInsights', "
+                 "'ApplicationInsightsWithDiagnosticSettings')"
+                 " | project recommendationId = 'dac421ec-2832-4c37-839e-b6dc5a38f2fa', name, id, tags, "
+                 "param1 = 'ApplicationInsightsDeploymentType: Classic'"),
+    },
     # WAF / AVS "Ensure alerts are configured for Azure Service Health alerts and notifications"
     "64b0d934-a348-4726-be79-d6b5c3a36495": {
         "defect": r"^\s*resources\s*\|\s*distinct\s+subscriptionId\s*\|\s*join",
