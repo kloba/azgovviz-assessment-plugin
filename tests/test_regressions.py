@@ -220,6 +220,32 @@ class SecondReviewTests(unittest.TestCase):
 
 
 class PdfContentsTests(unittest.TestCase):
+    def test_export_retries_when_the_browser_writes_nothing(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            html = Path(tmp) / "r.html"
+            html.write_text("<html></html>", encoding="utf-8")
+            calls = []
+
+            def flaky(browser, html_path, pdf_path, timeout):
+                calls.append(1)
+                if len(calls) < 3:
+                    return False  # exited without a file
+                pdf_path.write_bytes(b"%PDF-1.4 test")
+                return True
+
+            with mock.patch.object(report, "find_browser", return_value="chrome"), \
+                    mock.patch.object(report, "_print_to_pdf", side_effect=flaky), \
+                    mock.patch("time.sleep"):
+                out = report.export_pdf(html)
+            self.assertEqual((out, len(calls)), (html.with_suffix(".pdf"), 3))
+            with mock.patch.object(report, "find_browser", return_value="chrome"), \
+                    mock.patch.object(report, "_print_to_pdf", return_value=False), \
+                    mock.patch("time.sleep"):
+                self.assertIsNone(report.export_pdf(html))
+            self.assertFalse(html.with_suffix(".pdf").exists())  # no stale PDF is left behind
+
     def test_outline_page_numbers(self):
         import tempfile
         # Executive summary (p1) has a "Security" sub-heading; Findings (p2) has its own "Security" group (p3)

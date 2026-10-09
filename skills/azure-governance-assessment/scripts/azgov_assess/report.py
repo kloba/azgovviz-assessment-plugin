@@ -1185,9 +1185,6 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
     Some headless browser builds keep running after writing the PDF, so the file is polled and the browser is
     stopped once the PDF is complete.
     """
-    import shutil
-    import subprocess
-    import tempfile
     import time as _time
     browser = find_browser()
     if not browser:
@@ -1200,6 +1197,23 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
         except PermissionError:  # Windows: the previous PDF is open in a viewer
             pdf_path = pdf_path.with_name(f"{pdf_path.stem}-{_time.strftime('%H%M%S')}{pdf_path.suffix}")
             util.warn(f"the previous PDF is in use; writing {pdf_path.name} instead")
+    for attempt in range(1, 4):  # a headless browser now and then exits without writing (busy machine, profile lock)
+        if _print_to_pdf(browser, html_path, pdf_path, timeout):
+            return pdf_path
+        if pdf_path.exists():
+            pdf_path.unlink()
+        if attempt < 3:
+            util.debug(f"PDF export attempt {attempt} produced no file; retrying")
+            _time.sleep(2 * attempt)
+    util.warn("PDF export failed (browser produced no file)")
+    return None
+
+
+def _print_to_pdf(browser: str, html_path: Path, pdf_path: Path, timeout: int) -> bool:
+    import shutil
+    import subprocess
+    import tempfile
+    import time as _time
     profile = tempfile.mkdtemp(prefix="azgov-pdf-")
     try:
         proc = subprocess.Popen([browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
@@ -1230,10 +1244,7 @@ def export_pdf(html_path: Path, pdf_path: Optional[Path] = None, timeout: int = 
                     proc.kill()
     finally:
         shutil.rmtree(profile, ignore_errors=True)  # Edge may still touch its profile for a moment
-    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-        util.warn("PDF export failed (browser produced no file)")
-        return None
-    return pdf_path
+    return pdf_path.exists() and pdf_path.stat().st_size > 0
 
 
 # ----------------------------------------------------------------------------------------------
