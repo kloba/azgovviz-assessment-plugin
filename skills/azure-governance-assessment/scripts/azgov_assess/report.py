@@ -928,7 +928,7 @@ class Report:
             rows = [[f"{'/'.join(k.upper() for k in c.get('checklists') or [])} {c.get('id') or (c.get('guid') or '')[:8]}",
                      c.get("text"), c.get("action"), c.get("reason")] for c in corrections]
             corr_card = f"""
-  <div class="card pad corr-card" style="margin-top:16px"><h3>Checklist query corrections</h3>
+  <div class="card pad corr-card{' keep' if len(rows) <= 8 else ''}" style="margin-top:16px"><h3>Checklist query corrections</h3>
     <p class="small ink2" style="margin:6px 0 10px">These Azure/review-checklists queries do not test what their item says, so a
     corrected query ran instead, or the item was set aside for manual review. A correction stops applying once the upstream
     query no longer has the defect.</p>

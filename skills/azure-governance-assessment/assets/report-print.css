@@ -139,7 +139,12 @@ section.block > .section-head p { font-size: 12px; max-width: none; }
 .phase { padding: 11px 14px; break-inside: auto; }
 .phase li { break-inside: avoid; padding: 7px 0 7px 28px; }
 /* at most eight short items: moving the card whole beats leaving one bullet alone on the next page */
-.quick-card, .corr-card { break-inside: avoid; }
+.quick-card, .corr-card.keep { break-inside: avoid; }  /* a long corrections table flows over pages */
+/* the last card of the report: its bottom padding must not spill onto an otherwise empty page */
+main > section.block:last-of-type { margin-bottom: 0; padding-bottom: 0; }
+main > section.block:last-of-type > .card:last-child { padding-bottom: 0; margin-bottom: 0; }
+main > section.block:last-of-type > .card:last-child .tbl-wrap { margin-bottom: 0; }
+main > section.block:last-of-type > .card:last-child table { margin-bottom: 0; }
 .phase li::before { top: 8px; }
 
 /* findings: full cards for gaps, one line for passed / informational checks */
